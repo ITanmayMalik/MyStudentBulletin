@@ -4,17 +4,20 @@ import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signOut,
+  updateProfile,
 } from 'firebase/auth'
 import {
   addDoc,
   collection,
   doc,
+  getDoc,
   getDocs,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
   setDoc,
+  updateDoc,
   where,
 } from 'firebase/firestore'
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage'
@@ -28,13 +31,15 @@ const SCHOOL_SUGGESTIONS = [
 ]
 const emptyListing = {
   title: '', author: '', description: '', isbn: '', year_published: '', campus: '',
-  course_subject: '', course_number: '', price: '', has_code: false,
+  course_subject: '', course_number: '', price: '', condition: 'Used - Good', has_code: false,
 }
 
 function AuthScreen() {
   const [mode, setMode] = useState('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
   const [campus, setCampus] = useState('')
   const [error, setError] = useState('')
 
@@ -44,9 +49,13 @@ function AuthScreen() {
     try {
       if (mode === 'signup') {
         const result = await createUserWithEmailAndPassword(auth, email, password)
+        await updateProfile(result.user, { displayName: `${firstName.trim()} ${lastName.trim()}` })
         await setDoc(doc(db, 'users', result.user.uid), {
           uid: result.user.uid,
           email: result.user.email,
+          first_name: firstName.trim(),
+          last_name: lastName.trim(),
+          display_name: `${firstName.trim()} ${lastName.trim()}`,
           campus,
           created_at: serverTimestamp(),
         })
@@ -74,7 +83,10 @@ function AuthScreen() {
         <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
         <label>Password<input type="password" minLength="6" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
         {mode === 'signup' && (
-          <label>School <span className="optional">Optional</span><input list="school-options" value={campus} onChange={(e) => setCampus(e.target.value)} placeholder="College, university, or high school" /></label>
+          <>
+            <div className="name-grid"><label>First name<input value={firstName} onChange={(e) => setFirstName(e.target.value)} required /></label><label>Last name<input value={lastName} onChange={(e) => setLastName(e.target.value)} required /></label></div>
+            <label>School <span className="optional">Optional</span><input list="school-options" value={campus} onChange={(e) => setCampus(e.target.value)} placeholder="College, university, or high school" /></label>
+          </>
         )}
         {error && <p className="error">{error}</p>}
         <button className="primary" type="submit">{mode === 'signin' ? 'SIGN IN' : 'CREATE ACCOUNT'}</button>
@@ -159,6 +171,7 @@ function ListingForm({ user, onClose }) {
         course_subject: form.course_subject.trim().toUpperCase(),
         course_number: form.course_number.trim().toUpperCase(),
         price: Number(form.price),
+        condition: form.condition,
         has_code: form.has_code,
         photo_url: photo_urls[0],
         photo_urls,
@@ -206,6 +219,7 @@ function ListingForm({ user, onClose }) {
             <label className="span-2 description-field">Description <span className="optional">Optional</span><textarea maxLength="1500" rows="5" value={form.description} onChange={(e) => field('description', e.target.value)} placeholder="Condition, highlighting, missing pages, edition details, or pickup preferences…" /><small>{form.description.length}/1500</small></label>
             <label>Year published<input type="number" min="1000" max="2100" value={form.year_published} onChange={(e) => field('year_published', e.target.value)} required /></label>
             <label>School <span className="optional">Optional</span><input list="school-options" value={form.campus} onChange={(e) => field('campus', e.target.value)} placeholder="Any school or High School" /></label>
+            <label>Condition<select value={form.condition} onChange={(e) => field('condition', e.target.value)}><option>New</option><option>Used - Like new</option><option>Used - Good</option><option>Used - Fair</option></select></label>
             <label>Course subject<input placeholder="CMPT" value={form.course_subject} onChange={(e) => field('course_subject', e.target.value)} required /></label>
             <label>Course number<input placeholder="101" value={form.course_number} onChange={(e) => field('course_number', e.target.value)} required /></label>
             <label>Price (CAD)<input type="number" min="0" step="0.01" value={form.price} onChange={(e) => field('price', e.target.value)} required /></label>
@@ -223,7 +237,7 @@ function ListingForm({ user, onClose }) {
   )
 }
 
-function Chat({ user, listing, conversation, onClose }) {
+function Chat({ user, listing, conversation, onClose, onProfile }) {
   const [chatId, setChatId] = useState(conversation?.id || '')
   const [messages, setMessages] = useState([])
   const [text, setText] = useState('')
@@ -250,6 +264,8 @@ function Chat({ user, listing, conversation, onClose }) {
           seller_id: listing.seller_id,
           last_message: '',
           updated_at: serverTimestamp(),
+          buyer_unread: false,
+          seller_unread: false,
         })
         setChatId(chatRef.id)
       } catch (caught) {
@@ -261,9 +277,12 @@ function Chat({ user, listing, conversation, onClose }) {
 
   useEffect(() => {
     if (!chatId) return undefined
+    updateDoc(doc(db, 'chats', chatId), {
+      [isSeller ? 'seller_unread' : 'buyer_unread']: false,
+    }).catch((caught) => setError(caught.message))
     const messagesQuery = query(collection(db, 'chats', chatId, 'messages'), orderBy('created_at', 'asc'))
     return onSnapshot(messagesQuery, (snapshot) => setMessages(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))))
-  }, [chatId])
+  }, [chatId, isSeller])
 
   async function send(event) {
     event.preventDefault()
@@ -278,6 +297,11 @@ function Chat({ user, listing, conversation, onClose }) {
         message_text,
         created_at: serverTimestamp(),
       })
+      await updateDoc(doc(db, 'chats', chatId), {
+        last_message: message_text,
+        updated_at: serverTimestamp(),
+        [isSeller ? 'buyer_unread' : 'seller_unread']: true,
+      })
     } catch (caught) {
       setText(message_text)
       setError(caught.message)
@@ -287,7 +311,7 @@ function Chat({ user, listing, conversation, onClose }) {
   return (
     <div className="overlay" role="dialog" aria-modal="true">
       <section className="modal chat">
-        <div className="modal-head"><div><p className="eyebrow">RE: {listing.title}</p><h2>{isSeller ? 'Buyer conversation' : 'Message seller'}</h2></div><button className="close" onClick={onClose}>×</button></div>
+        <div className="modal-head"><div><p className="eyebrow">RE: {listing.title}</p><h2>{isSeller ? 'Buyer conversation' : 'Message seller'}</h2><button className="chat-profile-link" onClick={() => onProfile(isSeller ? conversation?.buyer_id : listing.seller_id)}>VIEW {isSeller ? 'BUYER' : 'SELLER'} PROFILE</button></div><button className="close" onClick={onClose}>×</button></div>
         <div className="safety">⚠️ Campus Safety Shield: Never send e-transfers/cash before inspecting the physical book in a public campus zone (e.g., SAMU, SUB, MacHall).</div>
         {error && <p className="error chat-error">{error}</p>}
         <div className="messages">
@@ -300,16 +324,27 @@ function Chat({ user, listing, conversation, onClose }) {
   )
 }
 
-function ListingDetail({ listing, user, onBack, onMessage }) {
+function ListingDetail({ listing, user, onBack, onMessage, onProfile }) {
   const photos = listing.photo_urls?.length ? listing.photo_urls : [listing.photo_url]
   const [activePhoto, setActivePhoto] = useState(photos[0])
+  const activeIndex = photos.indexOf(activePhoto)
+  const showPhoto = (offset) => setActivePhoto(photos[(activeIndex + offset + photos.length) % photos.length])
+
+  useEffect(() => {
+    function handleKey(event) {
+      if (event.key === 'ArrowLeft') showPhoto(-1)
+      if (event.key === 'ArrowRight') showPhoto(1)
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  })
 
   return (
     <main className="listing-page">
       <button className="back-button" onClick={onBack}>← BACK TO MARKETPLACE</button>
       <div className="listing-layout">
         <section className="listing-gallery">
-          <div className="listing-hero"><img src={activePhoto} alt={listing.title} /></div>
+          <div className="listing-hero"><img src={activePhoto} alt={listing.title} />{photos.length > 1 && <><button className="gallery-arrow left" aria-label="Previous image" onClick={() => showPhoto(-1)}>‹</button><button className="gallery-arrow right" aria-label="Next image" onClick={() => showPhoto(1)}>›</button><span className="photo-count">{activeIndex + 1} / {photos.length}</span></>}</div>
           {photos.length > 1 && <div className="listing-thumbs">{photos.map((photo, index) => <button className={activePhoto === photo ? 'active' : ''} onClick={() => setActivePhoto(photo)} key={photo}><img src={photo} alt={`${listing.title} view ${index + 1}`} /></button>)}</div>}
         </section>
         <aside className="listing-info">
@@ -320,9 +355,11 @@ function ListingDetail({ listing, user, onBack, onMessage }) {
           <div className="listing-facts">
             {listing.campus && <div><span>SCHOOL</span><b>{listing.campus}</b></div>}
             <div><span>ISBN</span><b>{listing.isbn_sanitized}</b></div>
+            <div><span>CONDITION</span><b>{listing.condition || 'Not specified'}</b></div>
             <div><span>ACCESS CODE</span><b>{listing.has_code ? 'Included' : 'Not included'}</b></div>
           </div>
           {listing.description && <div className="listing-description"><span>SELLER DESCRIPTION</span><p>{listing.description}</p></div>}
+          <button className="profile-link" onClick={() => onProfile(listing.seller_id)}>VIEW SELLER PROFILE</button>
           {listing.seller_id !== user.uid ? <button className="primary message-cta" onClick={onMessage}>MESSAGE SELLER</button> : <p className="own-listing">This is your listing.</p>}
           <div className="detail-safety">Meet in a public campus location. Inspect the physical book before sending money.</div>
         </aside>
@@ -331,30 +368,35 @@ function ListingDetail({ listing, user, onBack, onMessage }) {
   )
 }
 
-function Inbox({ user, listings, onOpenChat }) {
-  const [tab, setTab] = useState('buying')
-  const [chats, setChats] = useState([])
-  const [error, setError] = useState('')
+function Profile({ userId, listings, onClose }) {
+  const [profile, setProfile] = useState(null)
+  const [reviews, setReviews] = useState([])
 
   useEffect(() => {
-    const field = tab === 'buying' ? 'buyer_id' : 'seller_id'
-    const chatsQuery = query(collection(db, 'chats'), where(field, '==', user.uid))
-    return onSnapshot(chatsQuery, (snapshot) => {
-      setChats(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))
-      setError('')
-    }, (caught) => setError(caught.message))
-  }, [tab, user.uid])
+    getDoc(doc(db, 'users', userId)).then((snapshot) => setProfile(snapshot.exists() ? snapshot.data() : { display_name: 'Student' }))
+    return onSnapshot(query(collection(db, 'reviews'), where('reviewee_id', '==', userId)), (snapshot) => setReviews(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))))
+  }, [userId])
+
+  const selling = listings.filter((listing) => listing.seller_id === userId && listing.status === 'Available')
+  const average = reviews.length ? reviews.reduce((sum, review) => sum + Number(review.rating || 0), 0) / reviews.length : 0
+
+  return <div className="overlay" role="dialog" aria-modal="true"><section className="modal profile-modal"><button className="close" onClick={onClose}>×</button><div className="profile-avatar">{(profile?.display_name || 'S').charAt(0)}</div><p className="eyebrow">STUDENT PROFILE</p><h2>{profile?.display_name || 'Student'}</h2><p className="profile-school">{profile?.campus || 'School not listed'}</p><div className="profile-stats"><div><strong>{average ? average.toFixed(1) : '—'}</strong><span>RATING</span></div><div><strong>{reviews.length}</strong><span>REVIEWS</span></div><div><strong>{selling.length}</strong><span>FOR SALE</span></div></div><h3>Currently selling</h3><div className="profile-listings">{selling.length ? selling.map((item) => <div key={item.id}><img src={item.photo_url} alt="" /><span>{item.title}</span><b>${Number(item.price).toFixed(2)}</b></div>) : <p className="empty">No active listings.</p>}</div><h3>Reviews</h3><div className="review-list">{reviews.length ? reviews.map((review) => <article key={review.id}><b>{'★'.repeat(Math.round(review.rating))}</b><p>{review.comment}</p></article>) : <p className="empty">No reviews yet.</p>}</div></section></div>
+}
+
+function Inbox({ listings, onOpenChat, buyingChats, sellingChats }) {
+  const [tab, setTab] = useState('buying')
+  const chats = tab === 'buying' ? buyingChats : sellingChats
 
   return (
     <main className="inbox-page">
       <div className="inbox-heading"><div><p className="eyebrow">YOUR CONVERSATIONS</p><h1>Messages</h1></div><div className="inbox-tabs"><button className={tab === 'buying' ? 'active' : ''} onClick={() => setTab('buying')}>BUYING</button><button className={tab === 'selling' ? 'active' : ''} onClick={() => setTab('selling')}>SELLING</button></div></div>
       <div className="conversation-list">
-        {error && <p className="error">{error}</p>}
-        {!error && chats.length === 0 && <div className="inbox-empty"><strong>No {tab} conversations yet.</strong><p>{tab === 'buying' ? 'Open a listing to contact its seller.' : 'Buyer messages about your listings will appear here.'}</p></div>}
+        {chats.length === 0 && <div className="inbox-empty"><strong>No {tab} conversations yet.</strong><p>{tab === 'buying' ? 'Open a listing to contact its seller.' : 'Buyer messages about your listings will appear here.'}</p></div>}
         {chats.map((chat) => {
           const listing = listings.find((item) => item.id === chat.listing_id)
           if (!listing) return null
-          return <button className="conversation-row" key={chat.id} onClick={() => onOpenChat(chat, listing)}><img src={listing.photo_url} alt="" /><div><span>{tab === 'buying' ? 'BUYING' : 'SELLING'}</span><strong>{listing.title}</strong><p>{chat.last_message || 'Open conversation'}</p></div><b>→</b></button>
+          const unread = tab === 'buying' ? chat.buyer_unread : chat.seller_unread
+          return <button className={`conversation-row ${unread ? 'unread' : ''}`} key={chat.id} onClick={() => onOpenChat(chat, listing)}><img src={listing.photo_url} alt="" /><div><span>{tab === 'buying' ? 'BUYING' : 'SELLING'}</span><strong>{listing.title}</strong><p>{chat.last_message || 'Open conversation'}</p></div>{unread && <i>NEW</i>}<b>→</b></button>
         })}
       </div>
     </main>
@@ -371,6 +413,9 @@ function App() {
   const [activeListing, setActiveListing] = useState(null)
   const [activeChat, setActiveChat] = useState(null)
   const [page, setPage] = useState('market')
+  const [buyingChats, setBuyingChats] = useState([])
+  const [sellingChats, setSellingChats] = useState([])
+  const [profileId, setProfileId] = useState('')
 
   useEffect(() => onAuthStateChanged(auth, setUser), [])
 
@@ -380,6 +425,15 @@ function App() {
       setListings(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))
     })
   }, [user])
+
+  useEffect(() => {
+    if (!user) return undefined
+    const unsubscribeBuying = onSnapshot(query(collection(db, 'chats'), where('buyer_id', '==', user.uid)), (snapshot) => setBuyingChats(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))))
+    const unsubscribeSelling = onSnapshot(query(collection(db, 'chats'), where('seller_id', '==', user.uid)), (snapshot) => setSellingChats(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))))
+    return () => { unsubscribeBuying(); unsubscribeSelling() }
+  }, [user])
+
+  const unreadChats = buyingChats.filter((chat) => chat.buyer_unread).length + sellingChats.filter((chat) => chat.seller_unread).length
 
   const visible = useMemo(() => {
     const courseNeedle = course.trim().replace(/\s+/g, '').toUpperCase()
@@ -404,11 +458,11 @@ function App() {
     <>
       <datalist id="school-options">{SCHOOL_SUGGESTIONS.map((item) => <option key={item} value={item} />)}</datalist>
       <header>
-        <button className="brand" onClick={() => { setPage('market'); setActiveListing(null) }}><span className="brand-mark">M</span><span className="brand-name">MyStudentBulletin</span></button>
-        <nav><button className={`nav-link ${page === 'chats' ? 'active' : ''}`} onClick={() => { setPage('chats'); setActiveListing(null) }}>CHATS</button><span className="user-email">{user.email}</span><button className="outline" onClick={() => setCreateOpen(true)}>SELL A BOOK</button><button className="logout" onClick={() => signOut(auth)}>LOG OUT</button></nav>
+        <button className="brand" onClick={() => { setPage('market'); setActiveListing(null) }}><img src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" /></button>
+        <nav><button className={`nav-link chat-nav ${page === 'chats' ? 'active' : ''}`} onClick={() => { setPage('chats'); setActiveListing(null) }}>CHATS{unreadChats > 0 && <b>{unreadChats}</b>}</button><span className="user-email">{user.displayName || user.email}</span><button className="outline" onClick={() => setCreateOpen(true)}>SELL A BOOK</button><button className="logout" onClick={() => signOut(auth)}>LOG OUT</button></nav>
       </header>
-      {page === 'chats' ? <Inbox user={user} listings={listings} onOpenChat={(conversation, listing) => setActiveChat({ conversation, listing })} /> : activeListing ? (
-        <ListingDetail listing={activeListing} user={user} onBack={() => setActiveListing(null)} onMessage={() => setActiveChat({ listing: activeListing })} />
+      {page === 'chats' ? <Inbox listings={listings} buyingChats={buyingChats} sellingChats={sellingChats} onOpenChat={(conversation, listing) => setActiveChat({ conversation, listing })} /> : activeListing ? (
+        <ListingDetail listing={activeListing} user={user} onBack={() => setActiveListing(null)} onMessage={() => setActiveChat({ listing: activeListing })} onProfile={setProfileId} />
       ) : <main className="market">
         <aside>
           <p className="eyebrow">THE LOCAL BOOK BOARD</p>
@@ -433,7 +487,8 @@ function App() {
         </section>
       </main>}
       {createOpen && <ListingForm user={user} onClose={() => setCreateOpen(false)} />}
-      {activeChat && <Chat user={user} listing={activeChat.listing} conversation={activeChat.conversation} onClose={() => setActiveChat(null)} />}
+      {activeChat && <Chat user={user} listing={activeChat.listing} conversation={activeChat.conversation} onClose={() => setActiveChat(null)} onProfile={setProfileId} />}
+      {profileId && <Profile userId={profileId} listings={listings} onClose={() => setProfileId('')} />}
     </>
   )
 }

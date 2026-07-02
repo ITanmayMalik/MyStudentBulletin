@@ -4,7 +4,8 @@ service cloud.firestore {
     
     // User can only access their profile
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read: if request.auth != null;
+      allow create, update, delete: if request.auth != null && request.auth.uid == userId;
     }
     
     // Listings are public read, private write
@@ -18,12 +19,25 @@ service cloud.firestore {
     match /chats/{chatId} {
       allow read: if request.auth != null && (resource.data.buyer_id == request.auth.uid || resource.data.seller_id == request.auth.uid);
       allow create: if request.auth != null && request.resource.data.buyer_id == request.auth.uid;
+      allow update: if request.auth != null
+        && (resource.data.buyer_id == request.auth.uid || resource.data.seller_id == request.auth.uid)
+        && request.resource.data.buyer_id == resource.data.buyer_id
+        && request.resource.data.seller_id == resource.data.seller_id
+        && request.resource.data.listing_id == resource.data.listing_id;
       
       match /messages/{messageId} {
         allow read, write: if request.auth != null && 
           (get(/databases/$(database)/documents/chats/$(chatId)).data.buyer_id == request.auth.uid || 
            get(/databases/$(database)/documents/chats/$(chatId)).data.seller_id == request.auth.uid);
       }
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+        && request.resource.data.reviewer_id == request.auth.uid
+        && request.resource.data.reviewee_id != request.auth.uid;
+      allow update, delete: if request.auth != null && resource.data.reviewer_id == request.auth.uid;
     }
   }
 }
