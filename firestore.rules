@@ -1,0 +1,29 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // User can only access their profile
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Listings are public read, private write
+    match /listings/{listingId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.seller_id == request.auth.uid;
+      allow update, delete: if request.auth != null && resource.data.seller_id == request.auth.uid;
+    }
+    
+    // Chat access limited to parties involved
+    match /chats/{chatId} {
+      allow read: if request.auth != null && (resource.data.buyer_id == request.auth.uid || resource.data.seller_id == request.auth.uid);
+      allow create: if request.auth != null && request.resource.data.buyer_id == request.auth.uid;
+      
+      match /messages/{messageId} {
+        allow read, write: if request.auth != null && 
+          (get(/databases/$(database)/documents/chats/$(chatId)).data.buyer_id == request.auth.uid || 
+           get(/databases/$(database)/documents/chats/$(chatId)).data.seller_id == request.auth.uid);
+      }
+    }
+  }
+}
