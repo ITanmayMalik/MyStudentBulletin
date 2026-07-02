@@ -9,12 +9,13 @@ import {
   addDoc,
   collection,
   doc,
-  getDoc,
+  getDocs,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
   setDoc,
+  where,
 } from 'firebase/firestore'
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage'
 import { auth, db, storage } from './lib/firebase'
@@ -222,30 +223,41 @@ function ListingForm({ user, onClose }) {
   )
 }
 
-function Chat({ user, listing, onClose }) {
-  const [chatId, setChatId] = useState('')
+function Chat({ user, listing, conversation, onClose }) {
+  const [chatId, setChatId] = useState(conversation?.id || '')
   const [messages, setMessages] = useState([])
   const [text, setText] = useState('')
+  const [error, setError] = useState('')
   const isSeller = listing.seller_id === user.uid
 
   useEffect(() => {
+    if (conversation?.id) {
+      setChatId(conversation.id)
+      return
+    }
     if (isSeller) return
-    const id = `${listing.id}_${user.uid}`
     async function ensureChat() {
-      const chatRef = doc(db, 'chats', id)
-      if (!(await getDoc(chatRef)).exists()) {
-        await setDoc(chatRef, {
+      try {
+        const existing = await getDocs(query(collection(db, 'chats'), where('buyer_id', '==', user.uid)))
+        const matchingChat = existing.docs.find((item) => item.data().listing_id === listing.id)
+        if (matchingChat) {
+          setChatId(matchingChat.id)
+          return
+        }
+        const chatRef = await addDoc(collection(db, 'chats'), {
           listing_id: listing.id,
           buyer_id: user.uid,
           seller_id: listing.seller_id,
           last_message: '',
           updated_at: serverTimestamp(),
         })
+        setChatId(chatRef.id)
+      } catch (caught) {
+        setError(caught.message)
       }
-      setChatId(id)
     }
     ensureChat()
-  }, [isSeller, listing, user.uid])
+  }, [conversation?.id, isSeller, listing.id, listing.seller_id, user.uid])
 
   useEffect(() => {
     if (!chatId) return undefined
@@ -258,30 +270,94 @@ function Chat({ user, listing, onClose }) {
     const message_text = text.trim()
     if (!message_text || !chatId) return
     setText('')
-    await addDoc(collection(db, 'chats', chatId, 'messages'), {
-      chat_id: chatId,
-      sender_id: user.uid,
-      message_text,
-      created_at: serverTimestamp(),
-    })
+    setError('')
+    try {
+      await addDoc(collection(db, 'chats', chatId, 'messages'), {
+        chat_id: chatId,
+        sender_id: user.uid,
+        message_text,
+        created_at: serverTimestamp(),
+      })
+    } catch (caught) {
+      setText(message_text)
+      setError(caught.message)
+    }
   }
 
   return (
     <div className="overlay" role="dialog" aria-modal="true">
       <section className="modal chat">
-        <div className="modal-head"><div><p className="eyebrow">RE: {listing.title}</p><h2>Seller chat</h2></div><button className="close" onClick={onClose}>×</button></div>
+        <div className="modal-head"><div><p className="eyebrow">RE: {listing.title}</p><h2>{isSeller ? 'Buyer conversation' : 'Message seller'}</h2></div><button className="close" onClick={onClose}>×</button></div>
         <div className="safety">⚠️ Campus Safety Shield: Never send e-transfers/cash before inspecting the physical book in a public campus zone (e.g., SAMU, SUB, MacHall).</div>
-        {isSeller ? <p className="empty">Open this conversation from your inbox when a buyer contacts you.</p> : (
-          <>
-            <div className="messages">
-              {messages.length === 0 && <p className="empty">No messages yet. Ask if the book is still available.</p>}
-              {messages.map((message) => <p key={message.id} className={message.sender_id === user.uid ? 'mine' : 'theirs'}>{message.message_text}</p>)}
-            </div>
-            <form className="composer" onSubmit={send}><input aria-label="Message" value={text} onChange={(e) => setText(e.target.value)} placeholder="Write a message…" /><button className="primary">SEND</button></form>
-          </>
-        )}
+        {error && <p className="error chat-error">{error}</p>}
+        <div className="messages">
+          {!error && messages.length === 0 && <p className="empty">{chatId ? 'No messages yet. Say hello.' : 'Preparing secure chat…'}</p>}
+          {messages.map((message) => <p key={message.id} className={message.sender_id === user.uid ? 'mine' : 'theirs'}>{message.message_text}</p>)}
+        </div>
+        <form className="composer" onSubmit={send}><input aria-label="Message" value={text} onChange={(e) => setText(e.target.value)} placeholder="Write a message…" disabled={!chatId} /><button className="primary" disabled={!chatId}>SEND</button></form>
       </section>
     </div>
+  )
+}
+
+function ListingDetail({ listing, user, onBack, onMessage }) {
+  const photos = listing.photo_urls?.length ? listing.photo_urls : [listing.photo_url]
+  const [activePhoto, setActivePhoto] = useState(photos[0])
+
+  return (
+    <main className="listing-page">
+      <button className="back-button" onClick={onBack}>← BACK TO MARKETPLACE</button>
+      <div className="listing-layout">
+        <section className="listing-gallery">
+          <div className="listing-hero"><img src={activePhoto} alt={listing.title} /></div>
+          {photos.length > 1 && <div className="listing-thumbs">{photos.map((photo, index) => <button className={activePhoto === photo ? 'active' : ''} onClick={() => setActivePhoto(photo)} key={photo}><img src={photo} alt={`${listing.title} view ${index + 1}`} /></button>)}</div>}
+        </section>
+        <aside className="listing-info">
+          <p className="course">{listing.course_subject} {listing.course_number}</p>
+          <h1>{listing.title}</h1>
+          <p className="listing-author">by {listing.author} · {listing.year_published}</p>
+          <strong className="listing-price">${Number(listing.price).toFixed(2)}</strong>
+          <div className="listing-facts">
+            {listing.campus && <div><span>SCHOOL</span><b>{listing.campus}</b></div>}
+            <div><span>ISBN</span><b>{listing.isbn_sanitized}</b></div>
+            <div><span>ACCESS CODE</span><b>{listing.has_code ? 'Included' : 'Not included'}</b></div>
+          </div>
+          {listing.description && <div className="listing-description"><span>SELLER DESCRIPTION</span><p>{listing.description}</p></div>}
+          {listing.seller_id !== user.uid ? <button className="primary message-cta" onClick={onMessage}>MESSAGE SELLER</button> : <p className="own-listing">This is your listing.</p>}
+          <div className="detail-safety">Meet in a public campus location. Inspect the physical book before sending money.</div>
+        </aside>
+      </div>
+    </main>
+  )
+}
+
+function Inbox({ user, listings, onOpenChat }) {
+  const [tab, setTab] = useState('buying')
+  const [chats, setChats] = useState([])
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const field = tab === 'buying' ? 'buyer_id' : 'seller_id'
+    const chatsQuery = query(collection(db, 'chats'), where(field, '==', user.uid))
+    return onSnapshot(chatsQuery, (snapshot) => {
+      setChats(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))
+      setError('')
+    }, (caught) => setError(caught.message))
+  }, [tab, user.uid])
+
+  return (
+    <main className="inbox-page">
+      <div className="inbox-heading"><div><p className="eyebrow">YOUR CONVERSATIONS</p><h1>Messages</h1></div><div className="inbox-tabs"><button className={tab === 'buying' ? 'active' : ''} onClick={() => setTab('buying')}>BUYING</button><button className={tab === 'selling' ? 'active' : ''} onClick={() => setTab('selling')}>SELLING</button></div></div>
+      <div className="conversation-list">
+        {error && <p className="error">{error}</p>}
+        {!error && chats.length === 0 && <div className="inbox-empty"><strong>No {tab} conversations yet.</strong><p>{tab === 'buying' ? 'Open a listing to contact its seller.' : 'Buyer messages about your listings will appear here.'}</p></div>}
+        {chats.map((chat) => {
+          const listing = listings.find((item) => item.id === chat.listing_id)
+          if (!listing) return null
+          return <button className="conversation-row" key={chat.id} onClick={() => onOpenChat(chat, listing)}><img src={listing.photo_url} alt="" /><div><span>{tab === 'buying' ? 'BUYING' : 'SELLING'}</span><strong>{listing.title}</strong><p>{chat.last_message || 'Open conversation'}</p></div><b>→</b></button>
+        })}
+      </div>
+    </main>
   )
 }
 
@@ -293,6 +369,8 @@ function App() {
   const [isbn, setIsbn] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [activeListing, setActiveListing] = useState(null)
+  const [activeChat, setActiveChat] = useState(null)
+  const [page, setPage] = useState('market')
 
   useEffect(() => onAuthStateChanged(auth, setUser), [])
 
@@ -326,10 +404,12 @@ function App() {
     <>
       <datalist id="school-options">{SCHOOL_SUGGESTIONS.map((item) => <option key={item} value={item} />)}</datalist>
       <header>
-        <a className="brand" href="/"><span className="brand-mark">M</span><span className="brand-name">MyStudentBulletin</span></a>
-        <nav><span className="user-email">{user.email}</span><button className="outline" onClick={() => setCreateOpen(true)}>SELL A BOOK</button><button className="logout" onClick={() => signOut(auth)}>LOG OUT</button></nav>
+        <button className="brand" onClick={() => { setPage('market'); setActiveListing(null) }}><span className="brand-mark">M</span><span className="brand-name">MyStudentBulletin</span></button>
+        <nav><button className={`nav-link ${page === 'chats' ? 'active' : ''}`} onClick={() => { setPage('chats'); setActiveListing(null) }}>CHATS</button><span className="user-email">{user.email}</span><button className="outline" onClick={() => setCreateOpen(true)}>SELL A BOOK</button><button className="logout" onClick={() => signOut(auth)}>LOG OUT</button></nav>
       </header>
-      <main className="market">
+      {page === 'chats' ? <Inbox user={user} listings={listings} onOpenChat={(conversation, listing) => setActiveChat({ conversation, listing })} /> : activeListing ? (
+        <ListingDetail listing={activeListing} user={user} onBack={() => setActiveListing(null)} onMessage={() => setActiveChat({ listing: activeListing })} />
+      ) : <main className="market">
         <aside>
           <p className="eyebrow">THE LOCAL BOOK BOARD</p>
           <h1>Find the book.<br /><em>Skip the markup.</em></h1>
@@ -345,15 +425,15 @@ function App() {
             {visible.map((listing) => (
               <article className="card" key={listing.id}>
                 <div className="image-wrap"><img src={listing.photo_url} alt={`Cover of ${listing.title}`} />{listing.campus && <span>{listing.campus}</span>}<b>AVAILABLE</b></div>
-                <div className="card-body"><p className="course">{listing.course_subject} {listing.course_number}</p><h3>{listing.title}</h3><p className="author">{listing.author} · {listing.year_published}</p><div className="price-row"><strong>${Number(listing.price).toFixed(2)}</strong>{listing.has_code && <span>ACCESS CODE</span>}</div><button className="card-action" onClick={() => setActiveListing(listing)}>{listing.seller_id === user.uid ? 'VIEW LISTING' : 'MESSAGE SELLER'} →</button></div>
+                <div className="card-body"><p className="course">{listing.course_subject} {listing.course_number}</p><h3>{listing.title}</h3><p className="author">{listing.author} · {listing.year_published}</p><div className="price-row"><strong>${Number(listing.price).toFixed(2)}</strong>{listing.has_code && <span>ACCESS CODE</span>}</div><button className="card-action" onClick={() => setActiveListing(listing)}>VIEW FULL LISTING →</button></div>
               </article>
             ))}
           </div>
           {visible.length === 0 && <div className="no-results"><strong>Nothing here yet.</strong><p>Try clearing a filter, or be the first to list a book.</p><button className="primary" onClick={() => setCreateOpen(true)}>SELL A BOOK</button></div>}
         </section>
-      </main>
+      </main>}
       {createOpen && <ListingForm user={user} onClose={() => setCreateOpen(false)} />}
-      {activeListing && <Chat user={user} listing={activeListing} onClose={() => setActiveListing(null)} />}
+      {activeChat && <Chat user={user} listing={activeChat.listing} conversation={activeChat.conversation} onClose={() => setActiveChat(null)} />}
     </>
   )
 }
