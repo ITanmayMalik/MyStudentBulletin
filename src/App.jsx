@@ -26,7 +26,7 @@ const SCHOOL_SUGGESTIONS = [
   'High School',
 ]
 const emptyListing = {
-  title: '', author: '', isbn: '', year_published: '', campus: '',
+  title: '', author: '', description: '', isbn: '', year_published: '', campus: '',
   course_subject: '', course_number: '', price: '', has_code: false,
 }
 
@@ -87,27 +87,71 @@ function AuthScreen() {
 
 function ListingForm({ user, onClose }) {
   const [form, setForm] = useState(emptyListing)
-  const [photo, setPhoto] = useState(null)
+  const [photos, setPhotos] = useState([])
   const [acknowledged, setAcknowledged] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [uploadedCount, setUploadedCount] = useState(0)
   const [error, setError] = useState('')
 
   function field(name, value) {
     setForm((current) => ({ ...current, [name]: value }))
   }
 
+  function addPhotos(event) {
+    const selected = [...event.target.files]
+    const allowed = selected.filter((file) => ['image/png', 'image/jpeg'].includes(file.type))
+    if (allowed.length !== selected.length) setError('Only PNG, JPG, and JPEG images are accepted.')
+    setPhotos((current) => {
+      const available = Math.max(0, 8 - current.length)
+      return [...current, ...allowed.slice(0, available).map((file) => ({
+        id: crypto.randomUUID(),
+        file,
+        preview: URL.createObjectURL(file),
+      }))]
+    })
+    event.target.value = ''
+  }
+
+  function removePhoto(id) {
+    setPhotos((current) => {
+      const removed = current.find((photo) => photo.id === id)
+      if (removed) URL.revokeObjectURL(removed.preview)
+      return current.filter((photo) => photo.id !== id)
+    })
+  }
+
+  function makeCover(id) {
+    setPhotos((current) => {
+      const cover = current.find((photo) => photo.id === id)
+      return cover ? [cover, ...current.filter((photo) => photo.id !== id)] : current
+    })
+  }
+
   async function submit(event) {
     event.preventDefault()
-    if (!acknowledged || !photo) return
+    if (!acknowledged || photos.length === 0) return
     setSaving(true)
+    setUploadedCount(0)
     setError('')
     try {
-      const photoRef = ref(storage, `listings/${user.uid}/${crypto.randomUUID()}-${photo.name}`)
-      await uploadBytes(photoRef, photo, { contentType: photo.type })
-      const photo_url = await getDownloadURL(photoRef)
-      await addDoc(collection(db, 'listings'), {
+      const listingRef = doc(collection(db, 'listings'))
+      const sellerName = user.displayName || user.email?.split('@')[0] || 'seller'
+      const safeName = (value) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50)
+      const listingFolder = `${safeName(sellerName)}-${safeName(form.title)}-${listingRef.id}`
+      const photo_urls = []
+
+      for (const [index, photo] of photos.entries()) {
+        const extension = photo.file.type === 'image/png' ? 'png' : 'jpg'
+        const photoRef = ref(storage, `listings/${user.uid}/${listingFolder}/${index + 1}-${photo.id}.${extension}`)
+        await uploadBytes(photoRef, photo.file, { contentType: photo.file.type })
+        photo_urls.push(await getDownloadURL(photoRef))
+        setUploadedCount(index + 1)
+      }
+
+      await setDoc(listingRef, {
         title: form.title.trim(),
         author: form.author.trim(),
+        description: form.description.trim(),
         isbn_sanitized: sanitizeISBN(form.isbn),
         year_published: Number(form.year_published),
         campus: form.campus,
@@ -115,7 +159,8 @@ function ListingForm({ user, onClose }) {
         course_number: form.course_number.trim().toUpperCase(),
         price: Number(form.price),
         has_code: form.has_code,
-        photo_url,
+        photo_url: photo_urls[0],
+        photo_urls,
         seller_id: user.uid,
         status: 'Available',
       })
@@ -129,22 +174,49 @@ function ListingForm({ user, onClose }) {
   return (
     <div className="overlay" role="dialog" aria-modal="true">
       <form className="modal listing-form" onSubmit={submit}>
-        <div className="modal-head"><div><p className="eyebrow">NEW POST</p><h2>Create listing</h2></div><button type="button" className="close" onClick={onClose}>×</button></div>
-        <div className="form-grid">
-          <label className="span-2">Book title<input value={form.title} onChange={(e) => field('title', e.target.value)} required /></label>
-          <label>Author<input value={form.author} onChange={(e) => field('author', e.target.value)} required /></label>
-          <label>ISBN<input inputMode="numeric" value={form.isbn} onChange={(e) => field('isbn', sanitizeISBN(e.target.value))} required /></label>
-          <label>Year published<input type="number" min="1000" max="2100" value={form.year_published} onChange={(e) => field('year_published', e.target.value)} required /></label>
-          <label>School <span className="optional">Optional</span><input list="school-options" value={form.campus} onChange={(e) => field('campus', e.target.value)} placeholder="Type any school or choose High School" /></label>
-          <label>Course subject<input placeholder="CMPT" value={form.course_subject} onChange={(e) => field('course_subject', e.target.value)} required /></label>
-          <label>Course number<input placeholder="101" value={form.course_number} onChange={(e) => field('course_number', e.target.value)} required /></label>
-          <label>Price (CAD)<input type="number" min="0" step="0.01" value={form.price} onChange={(e) => field('price', e.target.value)} required /></label>
-          <label>Book photo<input type="file" accept="image/png, image/jpeg" onChange={(e) => setPhoto(e.target.files[0])} required /></label>
-        </div>
-        <label className="check"><input type="checkbox" checked={form.has_code} onChange={(e) => field('has_code', e.target.checked)} /> Includes unused access code</label>
-        <label className="legal-check"><input type="checkbox" checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} required /> I acknowledge this is a physical resale board. I am not selling digital files or pirated content. MyStudentBulletin is a matching service only.</label>
+        <div className="modal-head"><div><p className="eyebrow">NEW LISTING</p><h2>Sell your textbook</h2><p className="modal-intro">Clear photos and course details help your book sell faster.</p></div><button type="button" className="close" onClick={onClose}>×</button></div>
+        <section className="composer-section">
+          <div className="section-title"><span>01</span><div><strong>Photos</strong><small>Add up to 8 · First image is the cover</small></div></div>
+          <div className="photo-grid">
+            {photos.map((photo, index) => (
+              <div className={`photo-preview ${index === 0 ? 'cover-photo' : ''}`} key={photo.id}>
+                <img src={photo.preview} alt={`Upload preview ${index + 1}`} />
+                {index === 0 && <span>COVER</span>}
+                <div className="photo-actions">
+                  {index !== 0 && <button type="button" onClick={() => makeCover(photo.id)}>MAKE COVER</button>}
+                  <button type="button" onClick={() => removePhoto(photo.id)}>REMOVE</button>
+                </div>
+              </div>
+            ))}
+            {photos.length < 8 && (
+              <label className="photo-picker">
+                <input type="file" accept="image/png, image/jpeg" multiple onChange={addPhotos} />
+                <b>＋</b><strong>Add photos</strong><small>PNG, JPG or JPEG</small>
+              </label>
+            )}
+          </div>
+        </section>
+        <section className="composer-section">
+          <div className="section-title"><span>02</span><div><strong>Book details</strong><small>Tell buyers exactly what you have</small></div></div>
+          <div className="form-grid">
+            <label className="span-2">Book title<input value={form.title} onChange={(e) => field('title', e.target.value)} required /></label>
+            <label>Author<input value={form.author} onChange={(e) => field('author', e.target.value)} required /></label>
+            <label>ISBN<input inputMode="numeric" value={form.isbn} onChange={(e) => field('isbn', sanitizeISBN(e.target.value))} required /></label>
+            <label className="span-2 description-field">Description <span className="optional">Optional</span><textarea maxLength="1500" rows="5" value={form.description} onChange={(e) => field('description', e.target.value)} placeholder="Condition, highlighting, missing pages, edition details, or pickup preferences…" /><small>{form.description.length}/1500</small></label>
+            <label>Year published<input type="number" min="1000" max="2100" value={form.year_published} onChange={(e) => field('year_published', e.target.value)} required /></label>
+            <label>School <span className="optional">Optional</span><input list="school-options" value={form.campus} onChange={(e) => field('campus', e.target.value)} placeholder="Any school or High School" /></label>
+            <label>Course subject<input placeholder="CMPT" value={form.course_subject} onChange={(e) => field('course_subject', e.target.value)} required /></label>
+            <label>Course number<input placeholder="101" value={form.course_number} onChange={(e) => field('course_number', e.target.value)} required /></label>
+            <label>Price (CAD)<input type="number" min="0" step="0.01" value={form.price} onChange={(e) => field('price', e.target.value)} required /></label>
+          </div>
+          <label className="check"><input type="checkbox" checked={form.has_code} onChange={(e) => field('has_code', e.target.checked)} /> Includes unused access code</label>
+        </section>
+        <section className="composer-section legal-section">
+          <div className="section-title"><span>03</span><div><strong>Review & publish</strong><small>One last safety check</small></div></div>
+          <label className="legal-check"><input type="checkbox" checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} required /> I acknowledge this is a physical resale board. I am not selling digital files or pirated content. MyStudentBulletin is a matching service only.</label>
+        </section>
         {error && <p className="error">{error}</p>}
-        <button className="primary" disabled={saving || !acknowledged}>{saving ? 'PUBLISHING…' : 'PUBLISH LISTING'}</button>
+        <div className="publish-bar"><span>{photos.length}/8 photos added</span><button className="primary" disabled={saving || !acknowledged || photos.length === 0}>{saving ? `UPLOADING ${uploadedCount}/${photos.length}…` : 'PUBLISH LISTING'}</button></div>
       </form>
     </div>
   )
