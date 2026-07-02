@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   createUserWithEmailAndPassword,
+  deleteUser,
   EmailAuthProvider,
+  getAdditionalUserInfo,
   GoogleAuthProvider,
   linkWithCredential,
   onAuthStateChanged,
@@ -41,39 +43,70 @@ const SCHOOL_SUGGESTIONS = [
 const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL?.trim().toLowerCase() || ''
 const emptyListing = {
   title: '', author: '', description: '', isbn: '', year_published: '', campus: '',
-  course_subject: '', course_number: '', price: '', condition: 'Used - Good', has_code: false,
+  course_subject: '', course_number: '', price: '', condition: 'Used - Good',
+  location: '', pickup_preference: 'Public meetup', has_code: false,
 }
 
 function AuthScreen({ onLegal }) {
-  const [mode, setMode] = useState('signin')
+  const [mode, setMode] = useState(new URLSearchParams(window.location.search).get('mode') === 'signup' ? 'signup' : 'signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
+  const [signupUsername, setSignupUsername] = useState('')
   const [campus, setCampus] = useState('')
   const [error, setError] = useState('')
   const [agreed, setAgreed] = useState(false)
 
+  function validateSignupUsername() {
+    const value = signupUsername.trim()
+    if (!/^[A-Za-z_]{6,}$/.test(value)) {
+      setError('Username must be at least 6 characters and contain only letters or underscores.')
+      return null
+    }
+    return value
+  }
+
+  async function createProfileWithUsername(firebaseUser, username, profile) {
+    const normalized = username.toLowerCase()
+    await runTransaction(db, async (transaction) => {
+      const usernameRef = doc(db, 'usernames', normalized)
+      const usernameRecord = await transaction.get(usernameRef)
+      if (usernameRecord.exists()) throw new Error('That username is already taken.')
+      transaction.set(usernameRef, { uid: firebaseUser.uid, username })
+      transaction.set(doc(db, 'users', firebaseUser.uid), {
+        uid: firebaseUser.uid,
+        email: firebaseUser.email,
+        username,
+        ...profile,
+        created_at: serverTimestamp(),
+      })
+    })
+  }
+
   async function submit(event) {
     event.preventDefault()
     setError('')
+    let createdUser = null
     try {
       if (mode === 'signup') {
+        const username = validateSignupUsername()
+        if (!username) return
+        if (!window.confirm(`Create your permanent username @${username}? It cannot be changed later, and inappropriate usernames may be removed.`)) return
         const result = await createUserWithEmailAndPassword(auth, email, password)
+        createdUser = result.user
         await updateProfile(result.user, { displayName: `${firstName.trim()} ${lastName.trim()}` })
-        await setDoc(doc(db, 'users', result.user.uid), {
-          uid: result.user.uid,
-          email: result.user.email,
+        await createProfileWithUsername(result.user, username, {
           first_name: firstName.trim(),
           last_name: lastName.trim(),
           display_name: `${firstName.trim()} ${lastName.trim()}`,
           campus,
-          created_at: serverTimestamp(),
         })
       } else {
         await signInWithEmailAndPassword(auth, email, password)
       }
     } catch (caught) {
+      if (createdUser) await deleteUser(createdUser).catch(() => {})
       setError(caught.message.replace('Firebase: ', ''))
     }
   }
@@ -81,20 +114,29 @@ function AuthScreen({ onLegal }) {
   async function googleSignIn() {
     setError('')
     try {
+      const username = mode === 'signup' ? validateSignupUsername() : null
+      if (mode === 'signup' && !username) return
+      if (mode === 'signup' && !window.confirm(`Create your permanent username @${username}? It cannot be changed later, and inappropriate usernames may be removed.`)) return
       const result = await signInWithPopup(auth, new GoogleAuthProvider())
       const userRef = doc(db, 'users', result.user.uid)
       if (!(await getDoc(userRef)).exists()) {
+        if (mode !== 'signup') {
+          if (getAdditionalUserInfo(result)?.isNewUser) await deleteUser(result.user)
+          throw new Error('Choose “Need an account?” and select a username before creating a Google account.')
+        }
         const [given = '', ...family] = (result.user.displayName || '').split(' ')
-        await setDoc(userRef, {
-          uid: result.user.uid,
-          email: result.user.email,
+        try {
+          await createProfileWithUsername(result.user, username, {
           first_name: given,
           last_name: family.join(' '),
           display_name: result.user.displayName || 'Student',
           campus: '',
           photo_url: result.user.photoURL || '',
-          created_at: serverTimestamp(),
-        })
+          })
+        } catch (caught) {
+          if (getAdditionalUserInfo(result)?.isNewUser) await deleteUser(result.user).catch(() => {})
+          throw caught
+        }
       }
     } catch (caught) {
       setError(caught.message.replace('Firebase: ', ''))
@@ -119,6 +161,7 @@ function AuthScreen({ onLegal }) {
         {mode === 'signup' && (
           <>
             <div className="name-grid"><label>First name<input value={firstName} onChange={(e) => setFirstName(e.target.value)} required /></label><label>Last name<input value={lastName} onChange={(e) => setLastName(e.target.value)} required /></label></div>
+            <label>Username<input value={signupUsername} onChange={(e) => setSignupUsername(e.target.value)} minLength="6" pattern="[A-Za-z_]+" placeholder="student_name" required /><small className="field-help">At least 6 characters. Letters and underscores only. This can only be set once.</small></label>
             <label>School <span className="optional">Optional</span><input list="school-options" value={campus} onChange={(e) => setCampus(e.target.value)} placeholder="College, university, or high school" /></label>
           </>
         )}
@@ -135,7 +178,7 @@ function AuthScreen({ onLegal }) {
   )
 }
 
-function ListingForm({ user, onClose }) {
+function ListingForm({ user, onClose, standalone = false }) {
   const [form, setForm] = useState(emptyListing)
   const [photos, setPhotos] = useState([])
   const [acknowledged, setAcknowledged] = useState(false)
@@ -209,12 +252,15 @@ function ListingForm({ user, onClose }) {
         course_number: form.course_number.trim().toUpperCase(),
         price: Number(form.price),
         condition: form.condition,
+        location: form.location.trim(),
+        pickup_preference: form.pickup_preference,
         has_code: form.has_code,
         photo_url: photo_urls[0],
         photo_urls,
         seller_id: user.uid,
         status: 'Available',
         approval_status: 'Pending',
+        created_at: serverTimestamp(),
       })
       onClose()
     } catch (caught) {
@@ -224,7 +270,7 @@ function ListingForm({ user, onClose }) {
   }
 
   return (
-    <div className="overlay" role="dialog" aria-modal="true">
+    <div className={standalone ? 'listing-page-shell' : 'overlay'} role={standalone ? undefined : 'dialog'} aria-modal={standalone ? undefined : 'true'}>
       <form className="modal listing-form" onSubmit={submit}>
         <div className="modal-head"><div><p className="eyebrow">NEW LISTING</p><h2>Sell your textbook</h2><p className="modal-intro">Clear photos and course details help your book sell faster.</p></div><button type="button" className="close" onClick={onClose}>×</button></div>
         <section className="composer-section">
@@ -258,6 +304,8 @@ function ListingForm({ user, onClose }) {
             <label>Year published<input type="number" min="1000" max="2100" value={form.year_published} onChange={(e) => field('year_published', e.target.value)} required /></label>
             <label>School <span className="optional">Optional</span><input list="school-options" value={form.campus} onChange={(e) => field('campus', e.target.value)} placeholder="Any school or High School" /></label>
             <label>Condition<select value={form.condition} onChange={(e) => field('condition', e.target.value)}><option>New</option><option>Used - Like new</option><option>Used - Good</option><option>Used - Fair</option></select></label>
+            <label>Area <span className="optional">Optional</span><input value={form.location} onChange={(e) => field('location', e.target.value)} placeholder="NW Edmonton, Downtown Calgary…" /></label>
+            <label>Preferred pickup<select value={form.pickup_preference} onChange={(e) => field('pickup_preference', e.target.value)}><option>Public meetup</option><option>Campus meetup</option><option>Home pickup</option><option>Flexible</option></select></label>
             <label>Course subject<input placeholder="CMPT" value={form.course_subject} onChange={(e) => field('course_subject', e.target.value)} required /></label>
             <label>Course number<input placeholder="101" value={form.course_number} onChange={(e) => field('course_number', e.target.value)} required /></label>
             <label>Price (CAD)<input type="number" min="0" step="0.01" value={form.price} onChange={(e) => field('price', e.target.value)} required /></label>
@@ -467,6 +515,8 @@ function ListingDetail({ listing, user, onBack, onMessage, onProfile, onStatusCh
             {listing.campus && <div><span>SCHOOL</span><b>{listing.campus}</b></div>}
             <div><span>ISBN</span><b>{listing.isbn_sanitized}</b></div>
             <div><span>CONDITION</span><b>{listing.condition || 'Not specified'}</b></div>
+            <div><span>AREA</span><b>{listing.location || 'Ask seller'}</b></div>
+            <div><span>PICKUP</span><b>{listing.pickup_preference || 'Ask seller'}</b></div>
             <div><span>ACCESS CODE</span><b>{listing.has_code ? 'Included' : 'Not included'}</b></div>
           </div>
           {listing.description && <div className="listing-description"><span>SELLER DESCRIPTION</span><p>{listing.description}</p></div>}
@@ -479,7 +529,7 @@ function ListingDetail({ listing, user, onBack, onMessage, onProfile, onStatusCh
   )
 }
 
-function Profile({ userId, listings, onClose }) {
+function Profile({ userId, listings, onClose, standalone = false }) {
   const [profile, setProfile] = useState(null)
   const [reviews, setReviews] = useState([])
 
@@ -492,7 +542,7 @@ function Profile({ userId, listings, onClose }) {
   const approvedReviews = reviews.filter((review) => review.approval_status === 'Approved')
   const average = approvedReviews.length ? approvedReviews.reduce((sum, review) => sum + Number(review.rating || 0), 0) / approvedReviews.length : 0
 
-  return <div className="overlay" role="dialog" aria-modal="true"><section className="modal profile-modal"><button className="close" onClick={onClose}>×</button><div className="profile-avatar">{(profile?.display_name || 'S').charAt(0)}</div><p className="eyebrow">STUDENT PROFILE</p><h2>{profile?.display_name || 'Student'}</h2><p className="profile-school">{profile?.campus || 'School not listed'}</p><div className="profile-stats"><div><strong>{average ? average.toFixed(1) : 'N/A'}</strong><span>RATING</span></div><div><strong>{approvedReviews.length}</strong><span>REVIEWS</span></div><div><strong>{selling.length}</strong><span>FOR SALE</span></div></div><h3>Currently selling</h3><div className="profile-listings">{selling.length ? selling.map((item) => <div key={item.id}><img src={item.photo_url} alt="" /><span>{item.title}</span><b>${Number(item.price).toFixed(2)}</b></div>) : <p className="empty">No active listings.</p>}</div><h3>Reviews</h3><div className="review-list">{approvedReviews.length ? approvedReviews.map((review) => <article key={review.id}><b>{'★'.repeat(Math.round(review.rating))}</b><p>{review.comment}</p></article>) : <p className="empty">No reviews yet.</p>}</div></section></div>
+  return <div className={standalone ? 'public-profile-page' : 'overlay'} role={standalone ? undefined : 'dialog'} aria-modal={standalone ? undefined : 'true'}><section className={standalone ? 'profile-modal public-profile-card' : 'modal profile-modal'}><button className="close" onClick={onClose}>×</button><div className="profile-avatar">{(profile?.display_name || 'S').charAt(0)}</div><p className="eyebrow">STUDENT PROFILE</p><h2>{profile?.display_name || 'Student'}</h2><p className="profile-school">{profile?.campus || 'School not listed'}</p><div className="profile-stats"><div><strong>{average ? average.toFixed(1) : 'N/A'}</strong><span>RATING</span></div><div><strong>{approvedReviews.length}</strong><span>REVIEWS</span></div><div><strong>{selling.length}</strong><span>FOR SALE</span></div></div><h3>Currently selling</h3><div className="profile-listings">{selling.length ? selling.map((item) => <div key={item.id}><img src={item.photo_url} alt="" /><span>{item.title}</span><b>${Number(item.price).toFixed(2)}</b></div>) : <p className="empty">No active listings.</p>}</div><h3>Reviews</h3><div className="review-list">{approvedReviews.length ? approvedReviews.map((review) => <article key={review.id}><b>{'★'.repeat(Math.round(review.rating))}</b><p>{review.comment}</p></article>) : <p className="empty">No reviews yet.</p>}</div></section></div>
 }
 
 function MyProfile({ user, listings, onStatusChange }) {
@@ -586,7 +636,7 @@ function MyProfile({ user, listings, onStatusChange }) {
       <div className="profile-photo-wrap">{profile?.photo_url || user.photoURL ? <img src={profile?.photo_url || user.photoURL} alt="" /> : <span>{(profile?.display_name || user.displayName || 'S').charAt(0)}</span>}<label><input type="file" accept="image/png, image/jpeg" onChange={uploadAvatar} />CHANGE PHOTO</label></div>
       <div><p className="eyebrow">YOUR PROFILE</p><h1>{profile?.display_name || user.displayName || 'Student'}</h1>{profile?.username && <p className="profile-username">@{profile.username}</p>}<p>{profile?.campus || 'No school selected'} · {user.email}</p></div>
     </section>
-    <section className="identity-card"><div><label>First name<input value={profile?.first_name || ''} readOnly /></label><label>Last name<input value={profile?.last_name || ''} readOnly /></label><label>Email<input value={user.email || ''} readOnly /></label></div><div className="editable-profile-fields"><form onSubmit={saveUsername}><label>Username<input value={username} onChange={(e) => setUsername(e.target.value)} minLength="6" pattern="[A-Za-z_]+" placeholder="student_name" readOnly={Boolean(profile?.username)} required /></label><small>{profile?.username ? 'Your username is permanent. Inappropriate usernames may be removed by moderation.' : 'At least 6 characters. Letters and underscores only. Choose carefully. Your username can only be set once.'}</small>{!profile?.username && <button className="primary">SET USERNAME</button>}</form><form onSubmit={saveSchool}><label>School<input list="school-options" value={campus} onChange={(e) => setCampus(e.target.value)} placeholder="Choose or type your school" /></label><button className="primary">SAVE SCHOOL</button></form></div></section>
+    <section className="identity-card"><div><label>First name<input value={profile?.first_name || ''} readOnly /></label><label>Last name<input value={profile?.last_name || ''} readOnly /></label><label>Email<input value={user.email || ''} readOnly /></label></div><div className="editable-profile-fields"><form onSubmit={saveUsername}><label>Username<input value={username} onChange={(e) => setUsername(e.target.value)} minLength="6" pattern="[A-Za-z_]+" placeholder="student_name" readOnly={Boolean(profile?.username)} required /></label><small>{profile?.username ? 'Your username is permanent. Inappropriate usernames may be removed by moderation.' : 'At least 6 characters. Letters and underscores only. Choose carefully. Your username can only be set once.'}</small>{!profile?.username && <button className="primary">SET USERNAME</button>}</form><form onSubmit={saveSchool}><label>School<input list="school-options" value={campus} onChange={(e) => setCampus(e.target.value)} placeholder="Choose or type your school" /></label><small>Choose a suggestion or enter your school manually.</small><button className="primary">SAVE SCHOOL</button></form></div></section>
     {!hasPassword && <form className="password-card" onSubmit={addPassword}><div><strong>Add password sign-in</strong><p>Your Google account remains connected. This adds email/password as another sign-in method.</p></div><input type="password" minLength="6" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="New password" required /><button className="primary">ADD PASSWORD</button></form>}
     {notice && <p className="profile-notice">{notice}</p>}
     <section className="profile-dashboard"><div className="profile-section-head"><h2>Your listings</h2><span>{active.length} active · {sold.length} sold</span></div><div className="dashboard-listings">{[...active, ...sold].map((item) => <article key={item.id}><img src={item.photo_url} alt="" /><div><span>{item.status}</span><strong>{item.title}</strong><p>${Number(item.price).toFixed(2)} · {item.condition || 'Condition not set'}</p></div><select value={item.status} onChange={(e) => onStatusChange(item, e.target.value)}><option>Available</option><option>Pending</option><option>Sold</option></select></article>)}</div></section>
@@ -601,8 +651,17 @@ function WrittenReviews({ user, onEdit }) {
   return <div className="received-reviews">{reviews.length ? reviews.map((review) => <article key={review.id}><b>{'★'.repeat(Math.round(review.rating))}</b><p>{review.comment}</p><button onClick={() => onEdit(review)}>EDIT REVIEW</button></article>) : <p className="empty">You have not written any reviews.</p>}</div>
 }
 
-function Footer({ onNavigate }) {
-  return <footer><span className="footer-brand"><img src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" /><small>© 2026</small></span><nav><button onClick={() => onNavigate('tos')}>Terms</button><button onClick={() => onNavigate('privacy')}>Privacy</button><button onClick={() => onNavigate('aup')}>Acceptable Use</button></nav></footer>
+function Footer() {
+  return <footer><a className="footer-brand" href="/"><img src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" /></a><nav><a href="/terms/">Terms</a><a href="/privacy/">Privacy</a><a href="/acceptable-use/">Acceptable Use</a></nav></footer>
+}
+
+function WelcomePage({ user }) {
+  return <main className="welcome-page">
+    <nav className="welcome-nav"><a href="/"><img src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" /></a><div><a href="/terms/">POLICIES</a>{user ? <><a href="/marketplace/">MARKETPLACE</a><a className="welcome-button" href="/profile/">MY PROFILE</a></> : <><a href="/login/">SIGN IN</a><a className="welcome-button" href="/login/?mode=signup">JOIN THE BOARD</a></>}</div></nav>
+    <section className="welcome-hero"><div><p className="eyebrow">A STUDENT TEXTBOOK BULLETIN</p><h1>Books cost enough.<br /><em>Buying them shouldn’t.</em></h1><p>Find physical textbooks from students near you, list books you no longer need, and arrange safe local pickup without marketplace clutter.</p><div className="welcome-actions">{user ? <a className="primary" href="/marketplace/">BROWSE THE MARKETPLACE</a> : <><a className="primary" href="/login/?mode=signup">CREATE AN ACCOUNT</a><a href="/login/">I ALREADY HAVE AN ACCOUNT</a></>}</div></div><img src="/sticky-note.png" alt="" /></section>
+    <section className="welcome-features"><article><span>01</span><h2>List the exact book</h2><p>Course code, ISBN, condition, photos, location, and pickup preference.</p></article><article><span>02</span><h2>Talk directly</h2><p>Private student messaging with safety reminders and reporting tools.</p></article><article><span>03</span><h2>Meet safely</h2><p>Inspect the physical book in a public place before sending payment.</p></article></section>
+    <Footer />
+  </main>
 }
 
 function AdminDashboard({ user }) {
@@ -671,7 +730,7 @@ function Inbox({ listings, activeChat, onOpenChat, buyingChats, sellingChats, us
         </div>
       </aside>
       <section className="workspace-thread">
-        {activeChat ? <Chat embedded user={user} listing={activeChat.listing} conversation={activeChat.conversation} onClose={() => onOpenChat(null)} onProfile={onProfile} onStatusChange={onStatusChange} /> : <div className="select-chat"><span>MY</span><strong>Select a conversation</strong><p>Your messages will appear here.</p></div>}
+        {activeChat ? <Chat embedded user={user} listing={activeChat.listing} conversation={activeChat.conversation} onClose={() => onOpenChat(null)} onProfile={onProfile} onStatusChange={onStatusChange} /> : <div className="select-chat"><img src="/sticky-note.png" alt="" /><strong>Select a conversation</strong><p>Your messages will appear here.</p></div>}
       </section>
     </main>
   )
@@ -683,10 +742,22 @@ function App() {
   const [campus, setCampus] = useState('')
   const [course, setCourse] = useState('')
   const [isbn, setIsbn] = useState('')
-  const [createOpen, setCreateOpen] = useState(false)
+  const [sortBy, setSortBy] = useState('newest')
   const [activeListing, setActiveListing] = useState(null)
   const [activeChat, setActiveChat] = useState(null)
-  const [page, setPage] = useState(window.location.pathname.startsWith('/admin') ? 'admin' : 'market')
+  const pathname = window.location.pathname.replace(/\/+$/, '') || '/'
+  const page = pathname === '/login' ? 'login'
+    : pathname === '/marketplace' ? 'market'
+      : pathname === '/listing' ? 'listing'
+      : pathname === '/sell' ? 'sell'
+        : pathname === '/chats' ? 'chats'
+          : pathname === '/profile' ? 'profile'
+            : pathname === '/user' ? 'user'
+            : pathname === '/admin' ? 'admin'
+              : pathname === '/terms' ? 'tos'
+                : pathname === '/privacy' ? 'privacy'
+                  : pathname === '/acceptable-use' ? 'aup'
+                    : 'home'
   const [buyingChats, setBuyingChats] = useState([])
   const [sellingChats, setSellingChats] = useState([])
   const [profileId, setProfileId] = useState('')
@@ -705,11 +776,36 @@ function App() {
   }, [user])
 
   useEffect(() => {
+    if (page !== 'listing' || !listings.length) return
+    const listingId = new URLSearchParams(window.location.search).get('id')
+    setActiveListing(listings.find((item) => item.id === listingId) || null)
+  }, [page, listings])
+
+  useEffect(() => {
+    if (page === 'user') setProfileId(new URLSearchParams(window.location.search).get('id') || '')
+  }, [page])
+
+  useEffect(() => {
     if (!user) return undefined
     const unsubscribeBuying = onSnapshot(query(collection(db, 'chats'), where('buyer_id', '==', user.uid)), (snapshot) => setBuyingChats(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))))
     const unsubscribeSelling = onSnapshot(query(collection(db, 'chats'), where('seller_id', '==', user.uid)), (snapshot) => setSellingChats(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))))
     return () => { unsubscribeBuying(); unsubscribeSelling() }
   }, [user])
+
+  useEffect(() => {
+    if (page !== 'chats' || !listings.length) return
+    const params = new URLSearchParams(window.location.search)
+    const chatId = params.get('chat')
+    const listingId = params.get('listing')
+    if (chatId) {
+      const conversation = [...buyingChats, ...sellingChats].find((chat) => chat.id === chatId)
+      const listing = conversation && listings.find((item) => item.id === conversation.listing_id)
+      if (conversation && listing) setActiveChat({ conversation, listing })
+    } else if (listingId) {
+      const listing = listings.find((item) => item.id === listingId)
+      if (listing) setActiveChat({ listing })
+    }
+  }, [page, listings, buyingChats, sellingChats])
 
   const unreadChats = buyingChats.filter((chat) => chat.buyer_unread).length + sellingChats.filter((chat) => chat.seller_unread).length
 
@@ -739,7 +835,7 @@ function App() {
   const visible = useMemo(() => {
     const courseNeedle = course.trim().replace(/\s+/g, '').toUpperCase()
     const isbnNeedle = sanitizeISBN(isbn)
-    return listings.filter((item) => {
+    const filtered = listings.filter((item) => {
       const listingCourse = `${item.course_subject}${item.course_number}`.replace(/\s+/g, '').toUpperCase()
       return item.status !== 'Sold'
         && item.approval_status === 'Approved'
@@ -747,28 +843,43 @@ function App() {
         && (!courseNeedle || listingCourse.includes(courseNeedle))
         && (!isbnNeedle || sanitizeISBN(item.isbn_sanitized).includes(isbnNeedle))
     })
-  }, [listings, campus, course, isbn])
+    return filtered.sort((a, b) => {
+      if (sortBy === 'price-low') return Number(a.price) - Number(b.price)
+      if (sortBy === 'price-high') return Number(b.price) - Number(a.price)
+      return (b.created_at?.toMillis?.() || 0) - (a.created_at?.toMillis?.() || 0)
+    })
+  }, [listings, campus, course, isbn, sortBy])
 
   const institutions = useMemo(() => (
     [...new Set([...SCHOOL_SUGGESTIONS, ...listings.map((item) => item.campus).filter(Boolean)])].sort()
   ), [listings])
 
   if (user === undefined) return <div className="loading"><img src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" /></div>
-  if (page === 'tos') return <><ToS onBack={() => setPage('market')} /><Footer onNavigate={setPage} /></>
-  if (page === 'privacy') return <><Privacy onBack={() => setPage('market')} /><Footer onNavigate={setPage} /></>
-  if (page === 'aup') return <><AUP onBack={() => setPage('market')} /><Footer onNavigate={setPage} /></>
-  if (!user) return <><AuthScreen onLegal={setPage} /><Footer onNavigate={setPage} /></>
+  if (page === 'home') return <WelcomePage user={user} />
+  if (page === 'tos') return <><ToS onBack={() => window.location.assign('/')} /><Footer /></>
+  if (page === 'privacy') return <><Privacy onBack={() => window.location.assign('/')} /><Footer /></>
+  if (page === 'aup') return <><AUP onBack={() => window.location.assign('/')} /><Footer /></>
+  if (!user && page !== 'login') {
+    window.location.replace(`/login/?next=${encodeURIComponent(window.location.pathname + window.location.search)}`)
+    return <div className="loading"><img src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" /></div>
+  }
+  if (!user) return <><AuthScreen onLegal={(target) => window.location.assign(target === 'tos' ? '/terms/' : '/privacy/')} /><Footer /></>
+  if (page === 'login') {
+    const next = new URLSearchParams(window.location.search).get('next') || '/marketplace/'
+    window.location.replace(next.startsWith('/') ? next : '/')
+    return <div className="loading"><img src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" /></div>
+  }
   if (page === 'admin') return user.email?.toLowerCase() === ADMIN_EMAIL ? <AdminDashboard user={user} /> : <AdminAccessDenied />
 
   return (
     <>
       <datalist id="school-options">{SCHOOL_SUGGESTIONS.map((item) => <option key={item} value={item} />)}</datalist>
       <header>
-        <button className="brand" onClick={() => { setPage('market'); setActiveListing(null) }}><img src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" /></button>
-        <nav><button className={`nav-link chat-nav ${page === 'chats' ? 'active' : ''}`} onClick={() => { setPage('chats'); setActiveListing(null) }}>CHATS{unreadChats > 0 && <b>{unreadChats}</b>}</button><button className={`nav-link ${page === 'profile' ? 'active' : ''}`} onClick={() => { setPage('profile'); setActiveListing(null) }}>PROFILE</button><span className="user-email">{user.displayName || user.email}</span><button className="outline" onClick={() => setCreateOpen(true)}>SELL A BOOK</button><button className="logout" onClick={() => signOut(auth)}>LOG OUT</button></nav>
+        <a className="brand" href="/"><img src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" /></a>
+        <nav><a className={`nav-link ${page === 'market' ? 'active' : ''}`} href="/marketplace/">MARKETPLACE</a><a className={`nav-link chat-nav ${page === 'chats' ? 'active' : ''}`} href="/chats/">CHATS{unreadChats > 0 && <b>{unreadChats}</b>}</a><a className={`nav-link ${page === 'profile' ? 'active' : ''}`} href="/profile/">PROFILE</a><span className="user-email">{user.displayName || user.email}</span><a className="outline" href="/sell/">SELL A BOOK</a><button className="logout" onClick={async () => { await signOut(auth); window.location.assign('/login/') }}>LOG OUT</button></nav>
       </header>
-      {page === 'profile' ? <MyProfile user={user} listings={listings} onStatusChange={changeListingStatus} /> : page === 'chats' ? <Inbox user={user} listings={listings} buyingChats={buyingChats} sellingChats={sellingChats} activeChat={activeChat} onOpenChat={(conversation, listing) => setActiveChat(conversation ? { conversation, listing } : null)} onProfile={setProfileId} onStatusChange={changeListingStatus} /> : activeListing ? (
-        <ListingDetail listing={activeListing} user={user} onBack={() => setActiveListing(null)} onMessage={() => { setActiveChat({ listing: activeListing }); setPage('chats') }} onProfile={setProfileId} onStatusChange={changeListingStatus} />
+      {page === 'sell' ? <ListingForm standalone user={user} onClose={() => window.location.assign('/marketplace/')} /> : page === 'profile' ? <MyProfile user={user} listings={listings} onStatusChange={changeListingStatus} /> : page === 'user' ? (profileId ? <Profile standalone userId={profileId} listings={listings} onClose={() => window.location.assign('/')} /> : <main className="page-message"><h1>User not found.</h1></main>) : page === 'chats' ? <Inbox user={user} listings={listings} buyingChats={buyingChats} sellingChats={sellingChats} activeChat={activeChat} onOpenChat={(conversation) => window.location.assign(conversation ? `/chats/?chat=${conversation.id}` : '/chats/')} onProfile={(id) => window.location.assign(`/user/?id=${id}`)} onStatusChange={changeListingStatus} /> : page === 'listing' ? (
+        activeListing ? <ListingDetail listing={activeListing} user={user} onBack={() => window.location.assign('/marketplace/')} onMessage={() => window.location.assign(`/chats/?listing=${activeListing.id}`)} onProfile={(id) => window.location.assign(`/user/?id=${id}`)} onStatusChange={changeListingStatus} /> : <main className="page-message"><h1>Listing not found.</h1><a href="/marketplace/">Back to marketplace</a></main>
       ) : <main className="market">
         <aside>
           <p className="eyebrow">THE LOCAL BOOK BOARD</p>
@@ -777,6 +888,7 @@ function App() {
           <label>School<select value={campus} onChange={(e) => setCampus(e.target.value)}><option value="">Any school</option>{institutions.map((item) => <option key={item}>{item}</option>)}</select></label>
           <label>Course code<input value={course} onChange={(e) => setCourse(e.target.value)} placeholder="e.g. ECON 101" /></label>
           <label>ISBN<input inputMode="numeric" value={isbn} onChange={(e) => setIsbn(sanitizeISBN(e.target.value))} placeholder="Digits only" /></label>
+          <label>Sort by<select value={sortBy} onChange={(e) => setSortBy(e.target.value)}><option value="newest">Newest first</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option></select></label>
           <button className="text-button clear" onClick={() => { setCampus(''); setCourse(''); setIsbn('') }}>CLEAR FILTERS</button>
         </aside>
         <section className="results">
@@ -785,16 +897,14 @@ function App() {
             {visible.map((listing) => (
               <article className="card" key={listing.id}>
                 <div className="image-wrap"><img src={listing.photo_url} alt={`Cover of ${listing.title}`} />{listing.campus && <span>{listing.campus}</span>}<b>{listing.status.toUpperCase()}</b></div>
-                <div className="card-body"><p className="course">{listing.course_subject} {listing.course_number}</p><h3>{listing.title}</h3><p className="author">{listing.author} · {listing.year_published}</p><div className="price-row"><strong>${Number(listing.price).toFixed(2)}</strong>{listing.has_code && <span>ACCESS CODE</span>}</div><button className="card-action" onClick={() => setActiveListing(listing)}>VIEW FULL LISTING →</button></div>
+                <div className="card-body"><p className="course">{listing.course_subject} {listing.course_number}</p><h3>{listing.title}</h3><p className="author">{listing.author} · {listing.year_published}{listing.location ? ` · ${listing.location}` : ''}</p><div className="price-row"><strong>${Number(listing.price).toFixed(2)}</strong>{listing.has_code && <span>ACCESS CODE</span>}</div><a className="card-action" href={`/listing/?id=${listing.id}`}>VIEW FULL LISTING →</a></div>
               </article>
             ))}
           </div>
-          {visible.length === 0 && <div className="no-results"><strong>Nothing here yet.</strong><p>Try clearing a filter, or be the first to list a book.</p><button className="primary" onClick={() => setCreateOpen(true)}>SELL A BOOK</button></div>}
+          {visible.length === 0 && <div className="no-results"><strong>Nothing here yet.</strong><p>Try clearing a filter, or be the first to list a book.</p><a className="primary" href="/sell/">SELL A BOOK</a></div>}
         </section>
       </main>}
-      <Footer onNavigate={setPage} />
-      {createOpen && <ListingForm user={user} onClose={() => setCreateOpen(false)} />}
-      {profileId && <Profile userId={profileId} listings={listings} onClose={() => setProfileId('')} />}
+      <Footer />
     </>
   )
 }
