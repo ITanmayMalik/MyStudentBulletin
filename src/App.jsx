@@ -37,6 +37,7 @@ const SCHOOL_SUGGESTIONS = [
   'University of Calgary', 'Mount Royal University', 'SAIT', 'Bow Valley College',
   'High School',
 ]
+const ADMIN_EMAIL = 'thenoxprojects@gmail.com'
 const emptyListing = {
   title: '', author: '', description: '', isbn: '', year_published: '', campus: '',
   course_subject: '', course_number: '', price: '', condition: 'Used - Good', has_code: false,
@@ -212,6 +213,7 @@ function ListingForm({ user, onClose }) {
         photo_urls,
         seller_id: user.uid,
         status: 'Available',
+        approval_status: 'Pending',
       })
       onClose()
     } catch (caught) {
@@ -367,15 +369,27 @@ function Chat({ user, listing, conversation, onClose, onProfile, onStatusChange,
     })
   }
 
-  async function report(kind, target_id, context = '') {
+  async function report(kind, target_id, context = '', targetUserId = '') {
     const reason = window.prompt(`Why are you reporting this ${kind}?`)
     if (!reason?.trim()) return
+    const targetProfile = targetUserId ? await getDoc(doc(db, 'users', targetUserId)) : null
     await addDoc(collection(db, 'reports'), {
       reporter_id: user.uid,
+      reporter_email: user.email,
       report_type: kind,
       target_id,
+      target_user_id: targetUserId,
+      target_email: targetProfile?.exists() ? targetProfile.data().email : '',
+      chat_id: chatId,
+      listing_id: listing.id,
       context,
       reason: reason.trim(),
+      transcript: messages.map((message) => ({
+        sender_id: message.sender_id,
+        message_text: message.message_text,
+        message_type: message.message_type || 'user',
+        created_at: message.created_at?.toDate?.().toISOString() || '',
+      })),
       created_at: serverTimestamp(),
       status: 'Open',
     })
@@ -387,7 +401,7 @@ function Chat({ user, listing, conversation, onClose, onProfile, onStatusChange,
   return (
     <div className={embedded ? 'chat-embedded-shell' : 'overlay'} role={embedded ? undefined : 'dialog'} aria-modal={embedded ? undefined : 'true'}>
       <section className={embedded ? 'chat chat-page-panel' : 'modal chat'}>
-        <div className="modal-head"><div><p className="eyebrow">RE: {listing.title}</p><h2>{isSeller ? 'Buyer conversation' : 'Message seller'}</h2><div className="chat-header-actions"><button className="chat-profile-link" onClick={() => onProfile(isSeller ? conversation?.buyer_id : listing.seller_id)}>VIEW {isSeller ? 'BUYER' : 'SELLER'} PROFILE</button><button className="report-link" onClick={() => report('user', isSeller ? conversation?.buyer_id : listing.seller_id)}>REPORT USER</button></div></div><button className="close" onClick={onClose}>×</button></div>
+        <div className="modal-head"><div><p className="eyebrow">RE: {listing.title}</p><h2>{isSeller ? 'Buyer conversation' : 'Message seller'}</h2><div className="chat-header-actions"><button className="chat-profile-link" onClick={() => onProfile(isSeller ? conversation?.buyer_id : listing.seller_id)}>VIEW {isSeller ? 'BUYER' : 'SELLER'} PROFILE</button><button className="report-link" onClick={() => report('user', isSeller ? conversation?.buyer_id : listing.seller_id, '', isSeller ? conversation?.buyer_id : listing.seller_id)}>REPORT USER</button></div></div><button className="close" onClick={onClose}>×</button></div>
         <div className="safety">⚠️ Campus Safety Shield: Never send e-transfers/cash before inspecting the physical book in a public campus zone (e.g., SAMU, SUB, MacHall).</div>
         {isSeller && <div className="chat-listing-status"><span>LISTING: {listing.status}</span><button onClick={() => onStatusChange(listing, 'Pending')}>MARK PENDING</button><button onClick={() => onStatusChange(listing, 'Sold')}>MARK SOLD</button></div>}
         {error && <p className="error chat-error">{error}</p>}
@@ -401,7 +415,7 @@ function Chat({ user, listing, conversation, onClose, onProfile, onStatusChange,
             const canEdit = mine && message.message_type !== 'system' && Date.now() - (message.created_at?.toMillis?.() || 0) <= 5 * 60 * 1000
             return <div className={`message-block ${message.message_type === 'system' ? 'system-message' : mine ? 'mine' : 'theirs'}`} key={message.id}>
               {showDate && <div className="date-divider"><span>{date}</span></div>}
-              {message.message_type === 'system' ? <p>{message.message_text}</p> : <><div className="message-bubble"><p>{message.message_text}</p><small>{message.created_at?.toDate?.().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}{message.edited_at && ' · edited'}</small></div><div className="message-tools"><button onClick={() => reactToMessage(message, '❤️')}>♡</button><button onClick={() => reactToMessage(message, '👍')}>👍</button>{canEdit && <button onClick={() => editMessage(message)}>EDIT</button>}{!mine && <button onClick={() => report('message', message.id, message.message_text)}>REPORT</button>}</div>{Object.values(message.reactions || {}).length > 0 && <div className="reaction-pill">{Object.values(message.reactions).join(' ')}</div>}</>}
+              {message.message_type === 'system' ? <p>{message.message_text}</p> : <><div className="message-bubble"><p>{message.message_text}</p><small>{message.created_at?.toDate?.().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}{message.edited_at && ' · edited'}</small></div><div className="message-tools"><button onClick={() => reactToMessage(message, '❤️')}>♡</button><button onClick={() => reactToMessage(message, '👍')}>👍</button>{canEdit && <button onClick={() => editMessage(message)}>EDIT</button>}{!mine && <button onClick={() => report('message', message.id, message.message_text, message.sender_id)}>REPORT</button>}</div>{Object.values(message.reactions || {}).length > 0 && <div className="reaction-pill">{Object.values(message.reactions).join(' ')}</div>}</>}
             </div>
           })}
           <div ref={messagesEnd} />
@@ -465,10 +479,11 @@ function Profile({ userId, listings, onClose }) {
     return onSnapshot(query(collection(db, 'reviews'), where('reviewee_id', '==', userId)), (snapshot) => setReviews(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))))
   }, [userId])
 
-  const selling = listings.filter((listing) => listing.seller_id === userId && listing.status === 'Available')
-  const average = reviews.length ? reviews.reduce((sum, review) => sum + Number(review.rating || 0), 0) / reviews.length : 0
+  const selling = listings.filter((listing) => listing.seller_id === userId && listing.status === 'Available' && listing.approval_status === 'Approved')
+  const approvedReviews = reviews.filter((review) => review.approval_status === 'Approved')
+  const average = approvedReviews.length ? approvedReviews.reduce((sum, review) => sum + Number(review.rating || 0), 0) / approvedReviews.length : 0
 
-  return <div className="overlay" role="dialog" aria-modal="true"><section className="modal profile-modal"><button className="close" onClick={onClose}>×</button><div className="profile-avatar">{(profile?.display_name || 'S').charAt(0)}</div><p className="eyebrow">STUDENT PROFILE</p><h2>{profile?.display_name || 'Student'}</h2><p className="profile-school">{profile?.campus || 'School not listed'}</p><div className="profile-stats"><div><strong>{average ? average.toFixed(1) : '—'}</strong><span>RATING</span></div><div><strong>{reviews.length}</strong><span>REVIEWS</span></div><div><strong>{selling.length}</strong><span>FOR SALE</span></div></div><h3>Currently selling</h3><div className="profile-listings">{selling.length ? selling.map((item) => <div key={item.id}><img src={item.photo_url} alt="" /><span>{item.title}</span><b>${Number(item.price).toFixed(2)}</b></div>) : <p className="empty">No active listings.</p>}</div><h3>Reviews</h3><div className="review-list">{reviews.length ? reviews.map((review) => <article key={review.id}><b>{'★'.repeat(Math.round(review.rating))}</b><p>{review.comment}</p></article>) : <p className="empty">No reviews yet.</p>}</div></section></div>
+  return <div className="overlay" role="dialog" aria-modal="true"><section className="modal profile-modal"><button className="close" onClick={onClose}>×</button><div className="profile-avatar">{(profile?.display_name || 'S').charAt(0)}</div><p className="eyebrow">STUDENT PROFILE</p><h2>{profile?.display_name || 'Student'}</h2><p className="profile-school">{profile?.campus || 'School not listed'}</p><div className="profile-stats"><div><strong>{average ? average.toFixed(1) : '—'}</strong><span>RATING</span></div><div><strong>{approvedReviews.length}</strong><span>REVIEWS</span></div><div><strong>{selling.length}</strong><span>FOR SALE</span></div></div><h3>Currently selling</h3><div className="profile-listings">{selling.length ? selling.map((item) => <div key={item.id}><img src={item.photo_url} alt="" /><span>{item.title}</span><b>${Number(item.price).toFixed(2)}</b></div>) : <p className="empty">No active listings.</p>}</div><h3>Reviews</h3><div className="review-list">{approvedReviews.length ? approvedReviews.map((review) => <article key={review.id}><b>{'★'.repeat(Math.round(review.rating))}</b><p>{review.comment}</p></article>) : <p className="empty">No reviews yet.</p>}</div></section></div>
 }
 
 function MyProfile({ user, listings, onStatusChange }) {
@@ -539,7 +554,7 @@ function MyProfile({ user, listings, onStatusChange }) {
     }
   }
 
-  const received = reviews.filter((review) => (review.role || 'seller') === reviewTab)
+  const received = reviews.filter((review) => review.approval_status === 'Approved' && (review.role || 'seller') === reviewTab)
   const active = listings.filter((item) => item.seller_id === user.uid && item.status !== 'Sold')
   const sold = listings.filter((item) => item.seller_id === user.uid && item.status === 'Sold')
   const hasPassword = user.providerData.some((provider) => provider.providerId === 'password')
@@ -566,6 +581,34 @@ function WrittenReviews({ user, onEdit }) {
 
 function Footer({ onNavigate }) {
   return <footer><span>© 2026 MyStudentBulletin</span><nav><button onClick={() => onNavigate('tos')}>Terms</button><button onClick={() => onNavigate('privacy')}>Privacy</button><button onClick={() => onNavigate('aup')}>Acceptable Use</button></nav></footer>
+}
+
+function AdminDashboard({ user }) {
+  const [tab, setTab] = useState('listings')
+  const [listings, setListings] = useState([])
+  const [reviews, setReviews] = useState([])
+  const [reports, setReports] = useState([])
+
+  useEffect(() => onSnapshot(collection(db, 'listings'), (snapshot) => setListings(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))), [])
+  useEffect(() => onSnapshot(collection(db, 'reviews'), (snapshot) => setReviews(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))), [])
+  useEffect(() => onSnapshot(collection(db, 'reports'), (snapshot) => setReports(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))), [])
+
+  const pendingListings = listings.filter((item) => (item.approval_status || 'Pending') === 'Pending')
+  const pendingReviews = reviews.filter((item) => (item.approval_status || 'Pending') === 'Pending')
+  const openReports = reports.filter((item) => item.status !== 'Resolved')
+  const formatDate = (timestamp) => timestamp?.toDate?.().toLocaleString() || 'Pending timestamp'
+
+  return <main className="admin-shell">
+    <header className="admin-header"><div><p className="eyebrow">MYSTUDENTBULLETIN</p><h1>Admin desk</h1></div><div><span>{user.email}</span><button onClick={() => signOut(auth)}>SIGN OUT</button></div></header>
+    <nav className="admin-tabs"><button className={tab === 'listings' ? 'active' : ''} onClick={() => setTab('listings')}>LISTINGS <b>{pendingListings.length}</b></button><button className={tab === 'reviews' ? 'active' : ''} onClick={() => setTab('reviews')}>REVIEWS <b>{pendingReviews.length}</b></button><button className={tab === 'reports' ? 'active' : ''} onClick={() => setTab('reports')}>REPORTS <b>{openReports.length}</b></button></nav>
+    {tab === 'listings' && <section className="admin-queue">{listings.length ? listings.map((listing) => <article className="admin-card" key={listing.id}><img src={listing.photo_url} alt="" /><div className="admin-card-content"><div className="admin-meta"><span>{listing.approval_status || 'Pending'}</span><span>{listing.status}</span><span>{listing.campus || 'No school'}</span></div><h2>{listing.title}</h2><p>{listing.author} · {listing.year_published} · ISBN {listing.isbn_sanitized}</p><p><b>{listing.course_subject} {listing.course_number}</b> · {listing.condition} · ${Number(listing.price).toFixed(2)}</p><p className="admin-description">{listing.description || 'No description provided.'}</p><small>Seller UID: {listing.seller_id}</small><div className="admin-actions"><button onClick={() => updateDoc(doc(db, 'listings', listing.id), { approval_status: 'Approved' })}>APPROVE</button><button onClick={() => updateDoc(doc(db, 'listings', listing.id), { approval_status: 'Rejected' })}>REJECT</button></div></div></article>) : <p className="admin-empty">No listings submitted.</p>}</section>}
+    {tab === 'reviews' && <section className="admin-queue">{reviews.length ? reviews.map((review) => <article className="admin-card review-admin-card" key={review.id}><div className="admin-card-content"><div className="admin-meta"><span>{review.approval_status || 'Pending'}</span><span>{review.role || 'seller'} review</span></div><h2>{'★'.repeat(Math.round(review.rating || 0))}</h2><p className="admin-description">{review.comment}</p><small>From {review.reviewer_id} → {review.reviewee_id}</small><div className="admin-actions"><button onClick={() => updateDoc(doc(db, 'reviews', review.id), { approval_status: 'Approved' })}>APPROVE</button><button onClick={() => updateDoc(doc(db, 'reviews', review.id), { approval_status: 'Rejected' })}>REJECT</button></div></div></article>) : <p className="admin-empty">No reviews submitted.</p>}</section>}
+    {tab === 'reports' && <section className="admin-queue">{reports.length ? reports.map((report) => <details className="report-card" key={report.id}><summary><div><span>{report.status || 'Open'}</span><strong>{report.report_type?.toUpperCase()} REPORT</strong><p>{report.target_email || report.target_user_id || report.target_id}</p></div><time>{formatDate(report.created_at)}</time></summary><div className="report-body"><dl><dt>Reported user</dt><dd>{report.target_email || 'Unknown email'} ({report.target_user_id || 'No UID'})</dd><dt>Reporter</dt><dd>{report.reporter_email || report.reporter_id}</dd><dt>Reason</dt><dd>{report.reason}</dd><dt>Context</dt><dd>{report.context || 'No additional context'}</dd><dt>Listing</dt><dd>{report.listing_id || 'N/A'}</dd></dl><h3>Chat transcript</h3><div className="admin-transcript">{report.transcript?.length ? report.transcript.map((message, index) => <div key={`${message.created_at}-${index}`}><span>{message.sender_id}</span><p>{message.message_text}</p><time>{message.created_at || 'Unknown time'}</time></div>) : <p>No transcript was available.</p>}</div><button className="resolve-button" onClick={() => updateDoc(doc(db, 'reports', report.id), { status: 'Resolved', resolved_at: serverTimestamp() })}>MARK RESOLVED</button></div></details>) : <p className="admin-empty">No reports submitted.</p>}</section>}
+  </main>
+}
+
+function AdminAccessDenied() {
+  return <main className="admin-denied"><strong>403</strong><h1>Admin access only.</h1><p>This account is not authorized to access the moderation dashboard.</p><button className="primary" onClick={() => signOut(auth)}>SIGN OUT</button></main>
 }
 
 function Inbox({ listings, activeChat, onOpenChat, buyingChats, sellingChats, user, onProfile, onStatusChange }) {
@@ -602,7 +645,7 @@ function App() {
   const [createOpen, setCreateOpen] = useState(false)
   const [activeListing, setActiveListing] = useState(null)
   const [activeChat, setActiveChat] = useState(null)
-  const [page, setPage] = useState('market')
+  const [page, setPage] = useState(window.location.pathname.startsWith('/admin') ? 'admin' : 'market')
   const [buyingChats, setBuyingChats] = useState([])
   const [sellingChats, setSellingChats] = useState([])
   const [profileId, setProfileId] = useState('')
@@ -654,6 +697,7 @@ function App() {
     return listings.filter((item) => {
       const listingCourse = `${item.course_subject}${item.course_number}`.replace(/\s+/g, '').toUpperCase()
       return item.status !== 'Sold'
+        && item.approval_status === 'Approved'
         && (!campus || item.campus === campus)
         && (!courseNeedle || listingCourse.includes(courseNeedle))
         && (!isbnNeedle || sanitizeISBN(item.isbn_sanitized).includes(isbnNeedle))
@@ -669,6 +713,7 @@ function App() {
   if (page === 'privacy') return <><Privacy onBack={() => setPage('market')} /><Footer onNavigate={setPage} /></>
   if (page === 'aup') return <><AUP onBack={() => setPage('market')} /><Footer onNavigate={setPage} /></>
   if (!user) return <><AuthScreen onLegal={setPage} /><Footer onNavigate={setPage} /></>
+  if (page === 'admin') return user.email?.toLowerCase() === ADMIN_EMAIL ? <AdminDashboard user={user} /> : <AdminAccessDenied />
 
   return (
     <>

@@ -472,6 +472,8 @@ footer button:hover { color: #c92c55; }
 .select-chat p { margin-top: 7px; font-size: .78rem; }
 .chat-page-panel .messages { padding-left: max(25px, 8vw); padding-right: max(25px, 8vw); }
 .chat-page-panel .composer { padding-left: max(20px, 6vw); padding-right: max(20px, 6vw); }
+.message-block.mine, .message-block.theirs { color: inherit; background: transparent; align-self: stretch; }
+.message-block .message-bubble { width: fit-content; min-width: 62px; }
 
 @media (max-width: 800px) {
   .identity-card { grid-template-columns: 1fr; }
@@ -487,4 +489,54 @@ footer button:hover { color: #c92c55; }
   .workspace-thread { min-height: 520px; }
   .identity-card > div { grid-template-columns: 1fr; }
   .identity-card > div label:last-child { grid-column: auto; }
+}
+
+/* Admin moderation workspace */
+.admin-shell { min-height: 100vh; color: #151518; background: #f5f5f6; }
+.admin-header { position: static; height: auto; padding: 30px 4vw; background: #111114; border: 0; }
+.admin-header h1 { margin: 0; color: #fff; font-size: clamp(2.5rem, 5vw, 4.7rem); }
+.admin-header > div:last-child { display: flex; align-items: center; gap: 15px; color: #bbbcc3; font-size: .72rem; }
+.admin-header button { padding: 10px 13px; border: 1px solid #55555e; color: #fff; background: transparent; font-size: .6rem; font-weight: 850; }
+.admin-tabs { position: sticky; top: 0; z-index: 10; display: flex; gap: 3px; padding: 12px 4vw; background: rgba(255,255,255,.95); border-bottom: 1px solid #dcdce1; backdrop-filter: blur(12px); }
+.admin-tabs button { padding: 12px 16px; border: 0; color: #666670; background: transparent; font-size: .65rem; font-weight: 900; letter-spacing: .09em; }
+.admin-tabs button.active { color: #111114; background: #ffb3c1; }
+.admin-tabs b { display: inline-grid; place-items: center; min-width: 19px; height: 19px; margin-left: 5px; border-radius: 10px; color: #fff; background: #111114; font-size: .55rem; }
+.admin-queue { max-width: 1120px; margin: 0 auto; padding: 30px 4vw 80px; }
+.admin-card { display: grid; grid-template-columns: 220px 1fr; margin-bottom: 15px; border: 1px solid #d8d8de; background: #fff; box-shadow: 0 10px 30px rgba(20,20,25,.05); }
+.admin-card > img { width: 220px; height: 100%; min-height: 275px; object-fit: cover; background: #eeeef1; }
+.admin-card-content { padding: 24px; }
+.admin-meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.admin-meta span { padding: 5px 7px; color: #8d2440; background: #fff0f4; font-size: .54rem; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+.admin-card h2 { margin: 12px 0 6px; font-size: 1.6rem; }
+.admin-card p { color: #55555e; font-size: .8rem; }
+.admin-description { padding: 12px; background: #f7f7f8; line-height: 1.55; }
+.admin-card small { color: #85858e; }
+.admin-actions { display: flex; gap: 8px; margin-top: 18px; }
+.admin-actions button, .resolve-button { padding: 10px 15px; border: 1px solid #111114; color: #fff; background: #111114; font-size: .6rem; font-weight: 900; letter-spacing: .08em; }
+.admin-actions button:last-child { color: #a12647; border-color: #e8a2b4; background: #fff; }
+.review-admin-card { grid-template-columns: 1fr; }
+.report-card { margin-bottom: 10px; border: 1px solid #d8d8de; background: #fff; }
+.report-card summary { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 20px; cursor: pointer; list-style: none; }
+.report-card summary span { color: #b52b4e; font-size: .55rem; font-weight: 900; letter-spacing: .1em; }
+.report-card summary strong { display: block; margin: 5px 0; }
+.report-card summary p, .report-card summary time { margin: 0; color: #74747e; font-size: .7rem; }
+.report-body { padding: 22px; border-top: 1px solid #e1e1e5; }
+.report-body dl { display: grid; grid-template-columns: 130px 1fr; gap: 8px 15px; font-size: .76rem; }
+.report-body dt { color: #777780; font-weight: 800; }
+.report-body dd { margin: 0; }
+.admin-transcript { margin: 12px 0 22px; padding: 18px; background: #f5f5f7; }
+.admin-transcript > div { max-width: 75%; margin: 8px 0; padding: 10px 12px; border-radius: 12px; background: #fff; }
+.admin-transcript span, .admin-transcript time { color: #81818a; font-size: .56rem; }
+.admin-transcript p { margin: 5px 0; font-size: .76rem; }
+.admin-empty { padding: 70px; text-align: center; color: #777780; border: 1px dashed #cacad1; }
+.admin-denied { min-height: 100vh; display: grid; place-content: center; justify-items: center; padding: 30px; text-align: center; background: #fff; }
+.admin-denied strong { color: #ff6b8a; font-size: 5rem; }
+.admin-denied h1 { margin: 0; }
+.admin-denied p { color: #777780; }
+@media (max-width: 700px) {
+  .admin-header { align-items: flex-start; flex-direction: column; gap: 22px; }
+  .admin-card { grid-template-columns: 1fr; }
+  .admin-card > img { width: 100%; height: 240px; min-height: 0; }
+  .admin-tabs { overflow-x: auto; }
+  .report-card summary { align-items: flex-start; flex-direction: column; }
 }
