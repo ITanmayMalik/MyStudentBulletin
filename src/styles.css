@@ -341,12 +341,16 @@ input::placeholder, textarea::placeholder { color: #9999a2; }
 .auth-divider::before, .auth-divider::after { content: ""; height: 1px; flex: 1; background: #dcdce1; }
 .google-button { width: 100%; padding: 14px; border: 1px solid #cfcfd6; color: #111114; background: #fff; font-size: .7rem; font-weight: 850; letter-spacing: .08em; }
 .auth-logo { width: min(320px, 78%); height: 92px; margin: 0 0 26px; object-fit: contain; object-position: left center; }
+.loading img { width: min(300px, 70vw); height: 120px; object-fit: contain; }
 
 /* Footer and legal pages */
 footer { min-height: 72px; display: flex; align-items: center; justify-content: space-between; padding: 20px 4vw; color: #6c6c75; background: #f7f7f8; border-top: 1px solid #dedee3; font-size: .68rem; }
 footer nav { display: flex; gap: 18px; }
 footer button { padding: 0; border: 0; color: #44444c; background: transparent; font-size: .68rem; }
 footer button:hover { color: #c92c55; }
+.footer-brand { display: flex; align-items: center; gap: 10px; }
+.footer-brand img { width: 92px; height: 38px; object-fit: contain; object-position: left center; }
+.footer-brand small { color: #6c6c75; font-size: .62rem; }
 .legal-page { min-height: calc(100vh - 72px); padding: 60px 24px 100px; color: #f3f4f6; background: #0d0e11; }
 .legal-page > article { max-width: 780px; margin: 0 auto; }
 .legal-page h1 { color: #f3f4f6; margin: 20px 0 8px; }
@@ -356,6 +360,8 @@ footer button:hover { color: #c92c55; }
 .legal-updated { color: #777985 !important; font-size: .75rem !important; }
 .legal-contact { padding-top: 35px; margin-top: 45px; border-top: 1px solid #303139; }
 .legal-contact a { color: var(--accent-soft); }
+.legal-brand-back { display: flex; align-items: center; gap: 13px; padding: 0; border: 0; color: #111114; background: transparent; font-size: .62rem; font-weight: 850; letter-spacing: .1em; }
+.legal-brand-back img { width: 105px; height: 45px; object-fit: contain; object-position: left center; }
 
 /* Profile dashboard */
 .my-profile-page { max-width: 1100px; min-height: calc(100vh - 78px); margin: 0 auto; padding: 55px 4vw 90px; }
@@ -497,6 +503,7 @@ footer button:hover { color: #c92c55; }
 .admin-shell { min-height: 100vh; color: #151518; background: #f5f5f6; }
 .admin-header { position: static; height: auto; padding: 30px 4vw; background: #111114; border: 0; }
 .admin-header h1 { margin: 0; color: #fff; font-size: clamp(2.5rem, 5vw, 4.7rem); }
+.admin-logo { width: 145px; height: 58px; object-fit: contain; object-position: left center; }
 .admin-header > div:last-child { display: flex; align-items: center; gap: 15px; color: #bbbcc3; font-size: .72rem; }
 .admin-header button { padding: 10px 13px; border: 1px solid #55555e; color: #fff; background: transparent; font-size: .6rem; font-weight: 850; }
 .admin-tabs { position: sticky; top: 0; z-index: 10; display: flex; gap: 3px; padding: 12px 4vw; background: rgba(255,255,255,.95); border-bottom: 1px solid #dcdce1; backdrop-filter: blur(12px); }
