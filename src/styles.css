@@ -540,3 +540,45 @@ footer button:hover { color: #c92c55; }
   .admin-tabs { overflow-x: auto; }
   .report-card summary { align-items: flex-start; flex-direction: column; }
 }
+
+/* Final brand palette: paper white, sticky-note yellow, folded orange */
+:root {
+  --accent: #ff8a45;
+  --accent-soft: #ffe066;
+  --accent-pale: #fff8d8;
+  --paper: #ffffff;
+  --ink: #111114;
+  color: var(--ink);
+  background: var(--paper);
+}
+body { color: var(--ink); background: #fff; background-image: radial-gradient(circle at 82% -8%, rgba(255,224,102,.22), transparent 30%); }
+header { background: rgba(255,255,255,.96); }
+.brand { background: transparent; }
+.primary, .inbox-tabs button.active, .photo-preview > span, .chat-nav b { color: #111114; background: var(--accent-soft); border-color: var(--accent-soft); }
+.outline:hover, .gallery-arrow:hover { color: #111114; background: var(--accent-soft); border-color: var(--accent-soft); }
+.eyebrow, .course, .text-button, .card-action:hover, .nav-link:hover, .nav-link.active, .listing-price, .photo-picker b, .conversation-row span, .back-button:hover, .chat-profile-link, .profile-link, .profile-listings b, .received-reviews b { color: #d85f18; }
+input:focus, select:focus, textarea:focus, .cover-photo, .listing-thumbs button.active { border-color: var(--accent); }
+.card:hover { border-color: var(--accent); box-shadow: 0 18px 40px rgba(255,138,69,.13); }
+.price-row span { color: #b94c0c; border-color: #ffc18f; }
+.legal-check, .password-card { background: var(--accent-pale); border-color: #f4cf4f; }
+.conversation-row.unread { background: linear-gradient(90deg, #fff5bf, #fff 42%); border-color: #f0c936; }
+.message-block.mine .message-bubble { color: #111114; background: var(--accent-soft); }
+.profile-avatar, .profile-photo-wrap, .select-chat span { color: #111114; background: var(--accent-soft); }
+.profile-hero .profile-username, .terms-check button, footer button:hover, .received-reviews button, .report-link { color: #c65310; }
+.review-tabs button.active { color: #111114; border-color: var(--accent-soft); background: var(--accent-soft); }
+.admin-tabs button.active { color: #111114; background: var(--accent-soft); }
+.admin-meta span { color: #9d430f; background: var(--accent-pale); }
+.admin-actions button:last-child { color: #9d430f; border-color: #ffbd8b; }
+.legal-page { color: #111114; background: #fff; }
+.legal-page h1, .legal-page h2 { color: #111114; }
+.legal-page p { color: #4f4f58; }
+.legal-page .back-button { color: #111114; }
+.legal-updated { color: #777780 !important; }
+.legal-contact { border-color: #dedee3; }
+.legal-contact a { color: #c65310; }
+.auth-panel { background: radial-gradient(circle at 16% 82%, rgba(255,224,102,.34), #fff 42%); }
+.chat-sidebar { background: #fafafa; }
+.chat-sidebar .conversation-list, .chat .messages { overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.workspace-thread, .chat-embedded-shell, .chat-page-panel { min-height: 0; overflow: hidden; }
+.chat-page-panel { display: flex; }
+.chat-page-panel .messages { flex: 1 1 0; min-height: 0; }

@@ -653,6 +653,10 @@ function App() {
   useEffect(() => onAuthStateChanged(auth, setUser), [])
 
   useEffect(() => {
+    window.scrollTo(0, 0)
+  }, [page, activeListing?.id])
+
+  useEffect(() => {
     if (!user) return undefined
     return onSnapshot(collection(db, 'listings'), (snapshot) => {
       setListings(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))
