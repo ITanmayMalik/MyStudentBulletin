@@ -54,7 +54,8 @@ service cloud.firestore {
       allow update: if isAdmin()
         || (request.auth != null
           && resource.data.seller_id == request.auth.uid
-          && request.resource.data.approval_status == resource.data.approval_status);
+          && (request.resource.data.approval_status == resource.data.approval_status
+            || request.resource.data.approval_status == 'Pending'));
       allow delete: if isAdmin()
         || (request.auth != null && resource.data.seller_id == request.auth.uid);
     }

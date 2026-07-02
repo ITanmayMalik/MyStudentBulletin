@@ -59,7 +59,11 @@ function AuthScreen({ onLegal }) {
   const [agreed, setAgreed] = useState(false)
 
   function validateSignupUsername() {
-    const value = signupUsername.trim()
+    return validateUsernameValue(signupUsername)
+  }
+
+  function validateUsernameValue(input) {
+    const value = input.trim()
     if (!/^[A-Za-z_]{6,}$/.test(value)) {
       setError('Username must be at least 6 characters and contain only letters or underscores.')
       return null
@@ -120,17 +124,32 @@ function AuthScreen({ onLegal }) {
       const result = await signInWithPopup(auth, new GoogleAuthProvider())
       const userRef = doc(db, 'users', result.user.uid)
       if (!(await getDoc(userRef)).exists()) {
-        if (mode !== 'signup') {
-          if (getAdditionalUserInfo(result)?.isNewUser) await deleteUser(result.user)
-          throw new Error('Choose “Need an account?” and select a username before creating a Google account.')
+        let googleUsername = username
+        let googleCampus = campus
+        if (!googleUsername) {
+          const enteredUsername = window.prompt('Choose a permanent username. Use at least 6 letters or underscores. It cannot be changed later.')
+          if (!enteredUsername) {
+            if (getAdditionalUserInfo(result)?.isNewUser) await deleteUser(result.user)
+            throw new Error('A username is required to finish creating your account.')
+          }
+          googleUsername = validateUsernameValue(enteredUsername)
+          if (!googleUsername) {
+            if (getAdditionalUserInfo(result)?.isNewUser) await deleteUser(result.user)
+            return
+          }
+          if (!window.confirm(`Create your permanent username @${googleUsername}? It cannot be changed later, and inappropriate usernames may be removed.`)) {
+            if (getAdditionalUserInfo(result)?.isNewUser) await deleteUser(result.user)
+            return
+          }
+          googleCampus = window.prompt('What school do you attend? This is optional and can be changed later.', '')?.trim() || ''
         }
         const [given = '', ...family] = (result.user.displayName || '').split(' ')
         try {
-          await createProfileWithUsername(result.user, username, {
+          await createProfileWithUsername(result.user, googleUsername, {
           first_name: given,
           last_name: family.join(' '),
           display_name: result.user.displayName || 'Student',
-          campus: '',
+          campus: googleCampus,
           photo_url: result.user.photoURL || '',
           })
         } catch (caught) {
@@ -147,14 +166,14 @@ function AuthScreen({ onLegal }) {
     <main className="auth-shell">
       <datalist id="school-options">{SCHOOL_SUGGESTIONS.map((item) => <option key={item} value={item} />)}</datalist>
       <section className="auth-panel">
-        <p className="eyebrow">BUILT FOR STUDENTS</p>
-        <h1>Study more.<br />Spend less.</h1>
-        <p className="muted">A local marketplace for physical textbooks, from high school through university.</p>
+        <p className="eyebrow">TEXTBOOKS, WITHOUT THE MARKUP</p>
+        <h1>Get the book.<br />Skip the bookstore price.</h1>
+        <p className="muted">Buy and sell physical textbooks with students in your area.</p>
       </section>
       <form className="auth-form" onSubmit={submit}>
         <img className="auth-logo" src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" />
         <div>
-          <h2>{mode === 'signin' ? 'Welcome back.' : 'Join the board.'}</h2>
+          <h2>{mode === 'signin' ? 'Good to see you.' : 'Create your account.'}</h2>
         </div>
         <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
         <label>Password<input type="password" minLength="6" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
@@ -178,9 +197,17 @@ function AuthScreen({ onLegal }) {
   )
 }
 
-function ListingForm({ user, onClose, standalone = false }) {
-  const [form, setForm] = useState(emptyListing)
-  const [photos, setPhotos] = useState([])
+function ListingForm({ user, onClose, standalone = false, editingListing = null }) {
+  const [form, setForm] = useState(() => editingListing ? {
+    ...emptyListing,
+    ...editingListing,
+    isbn: editingListing.isbn_sanitized || '',
+  } : emptyListing)
+  const [photos, setPhotos] = useState(() => (editingListing?.photo_urls?.length ? editingListing.photo_urls : [editingListing?.photo_url].filter(Boolean)).map((url) => ({
+    id: crypto.randomUUID(),
+    preview: url,
+    existingUrl: url,
+  })))
   const [acknowledged, setAcknowledged] = useState(false)
   const [saving, setSaving] = useState(false)
   const [uploadedCount, setUploadedCount] = useState(0)
@@ -227,13 +254,18 @@ function ListingForm({ user, onClose, standalone = false }) {
     setUploadedCount(0)
     setError('')
     try {
-      const listingRef = doc(collection(db, 'listings'))
+      const listingRef = editingListing ? doc(db, 'listings', editingListing.id) : doc(collection(db, 'listings'))
       const sellerName = user.displayName || user.email?.split('@')[0] || 'seller'
       const safeName = (value) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50)
       const listingFolder = `${safeName(sellerName)}-${safeName(form.title)}-${listingRef.id}`
       const photo_urls = []
 
       for (const [index, photo] of photos.entries()) {
+        if (photo.existingUrl) {
+          photo_urls.push(photo.existingUrl)
+          setUploadedCount(index + 1)
+          continue
+        }
         const extension = photo.file.type === 'image/png' ? 'png' : 'jpg'
         const photoRef = ref(storage, `listings/${user.uid}/${listingFolder}/${index + 1}-${photo.id}.${extension}`)
         await uploadBytes(photoRef, photo.file, { contentType: photo.file.type })
@@ -241,7 +273,7 @@ function ListingForm({ user, onClose, standalone = false }) {
         setUploadedCount(index + 1)
       }
 
-      await setDoc(listingRef, {
+      const listingData = {
         title: form.title.trim(),
         author: form.author.trim(),
         description: form.description.trim(),
@@ -258,10 +290,12 @@ function ListingForm({ user, onClose, standalone = false }) {
         photo_url: photo_urls[0],
         photo_urls,
         seller_id: user.uid,
-        status: 'Available',
+        status: editingListing?.status || 'Available',
         approval_status: 'Pending',
-        created_at: serverTimestamp(),
-      })
+        ...(editingListing ? { updated_at: serverTimestamp() } : { created_at: serverTimestamp() }),
+      }
+      if (editingListing) await setDoc(listingRef, listingData, { merge: true })
+      else await setDoc(listingRef, listingData)
       onClose()
     } catch (caught) {
       setError(caught.message)
@@ -272,9 +306,9 @@ function ListingForm({ user, onClose, standalone = false }) {
   return (
     <div className={standalone ? 'listing-page-shell' : 'overlay'} role={standalone ? undefined : 'dialog'} aria-modal={standalone ? undefined : 'true'}>
       <form className="modal listing-form" onSubmit={submit}>
-        <div className="modal-head"><div><p className="eyebrow">NEW LISTING</p><h2>Sell your textbook</h2><p className="modal-intro">Clear photos and course details help your book sell faster.</p></div><button type="button" className="close" onClick={onClose}>×</button></div>
+        <div className="modal-head"><div><p className="eyebrow">{editingListing ? 'EDIT LISTING' : 'LIST A BOOK'}</p><h2>{editingListing ? 'Update your book' : 'What are you selling?'}</h2><p className="modal-intro">{editingListing ? 'Changes will be reviewed again before the listing returns to the marketplace.' : 'Add honest details and a few clear photos so buyers know exactly what to expect.'}</p></div><button type="button" className="close" onClick={onClose}>×</button></div>
         <section className="composer-section">
-          <div className="section-title"><span>01</span><div><strong>Photos</strong><small>Add up to 8 · First image is the cover</small></div></div>
+          <div className="section-title"><span>01</span><div><strong>Photos</strong><small>Add up to 8 photos. The first one will be the cover.</small></div></div>
           <div className="photo-grid">
             {photos.map((photo, index) => (
               <div className={`photo-preview ${index === 0 ? 'cover-photo' : ''}`} key={photo.id}>
@@ -295,7 +329,7 @@ function ListingForm({ user, onClose, standalone = false }) {
           </div>
         </section>
         <section className="composer-section">
-          <div className="section-title"><span>02</span><div><strong>Book details</strong><small>Tell buyers exactly what you have</small></div></div>
+          <div className="section-title"><span>02</span><div><strong>Describe it clearly</strong><small>Include the edition, course, condition, and anything a buyer should know.</small></div></div>
           <div className="form-grid">
             <label className="span-2">Book title<input value={form.title} onChange={(e) => field('title', e.target.value)} required /></label>
             <label>Author<input value={form.author} onChange={(e) => field('author', e.target.value)} required /></label>
@@ -313,11 +347,11 @@ function ListingForm({ user, onClose, standalone = false }) {
           <label className="check"><input type="checkbox" checked={form.has_code} onChange={(e) => field('has_code', e.target.checked)} /> Includes unused access code</label>
         </section>
         <section className="composer-section legal-section">
-          <div className="section-title"><span>03</span><div><strong>Review & publish</strong><small>One last safety check</small></div></div>
+          <div className="section-title"><span>03</span><div><strong>Check your listing</strong><small>Confirm that you are selling a lawful physical copy.</small></div></div>
           <label className="legal-check"><input type="checkbox" checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} required /> I acknowledge this is a physical resale board. I am not selling digital files or pirated content. MyStudentBulletin is a matching service only.</label>
         </section>
         {error && <p className="error">{error}</p>}
-        <div className="publish-bar"><span>{photos.length}/8 photos added</span><button className="primary" disabled={saving || !acknowledged || photos.length === 0}>{saving ? `UPLOADING ${uploadedCount}/${photos.length}…` : 'PUBLISH LISTING'}</button></div>
+        <div className="publish-bar"><span>{photos.length}/8 photos added</span><button className="primary" disabled={saving || !acknowledged || photos.length === 0}>{saving ? `UPLOADING ${uploadedCount}/${photos.length}…` : editingListing ? 'SAVE CHANGES' : 'PUBLISH LISTING'}</button></div>
       </form>
     </div>
   )
@@ -460,10 +494,10 @@ function Chat({ user, listing, conversation, onClose, onProfile, onStatusChange,
       <section className={embedded ? 'chat chat-page-panel' : 'modal chat'}>
         {embedded ? <div className="chat-context-bar"><img src={listing.photo_url} alt="" /><div><strong>{listing.title}</strong><span>{isSeller ? 'Buyer' : 'Seller'}: {otherProfile?.display_name || otherProfile?.username || 'Student'} · ${Number(listing.price).toFixed(2)}</span></div><button onClick={() => onProfile(otherUserId)}>VIEW PROFILE</button><button className="context-close" onClick={onClose}>×</button></div> : <div className="modal-head"><div><p className="eyebrow">RE: {listing.title}</p><h2>{isSeller ? 'Buyer conversation' : 'Message seller'}</h2><div className="chat-header-actions"><button className="chat-profile-link" onClick={() => onProfile(otherUserId)}>VIEW {isSeller ? 'BUYER' : 'SELLER'} PROFILE</button><button className="report-link" onClick={() => report('user', otherUserId, '', otherUserId)}>REPORT USER</button></div></div><button className="close" onClick={onClose}>×</button></div>}
         {safetyVisible && <div className="safety">⚠️ Never send money before inspecting the physical book in a public campus location.<button aria-label="Dismiss safety warning" onClick={() => setSafetyVisible(false)}>×</button></div>}
-        {isSeller && <div className="chat-listing-status"><span>LISTING: {listing.status}</span><button onClick={() => onStatusChange(listing, 'Pending')}>MARK PENDING</button><button onClick={() => onStatusChange(listing, 'Sold')}>MARK SOLD</button></div>}
+        {isSeller && <div className="chat-listing-status"><span>YOUR LISTING: {listing.status}</span><button onClick={() => onStatusChange(listing, 'Available')}>MARK AVAILABLE</button><button onClick={() => onStatusChange(listing, 'Pending')}>MARK PENDING</button><button onClick={() => onStatusChange(listing, 'Sold')}>MARK SOLD</button></div>}
         {error && <p className="error chat-error">{error}</p>}
         <div className="messages">
-          {!error && messages.length === 0 && <p className="empty">{chatId ? 'No messages yet. Say hello.' : 'Preparing secure chat…'}</p>}
+          {!error && messages.length === 0 && <p className="empty">{chatId ? 'No messages yet. Ask about the book when you are ready.' : 'Opening your conversation…'}</p>}
           {messages.map((message) => {
             const date = message.created_at?.toDate?.().toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) || ''
             const showDate = date && date !== previousDate
@@ -521,7 +555,7 @@ function ListingDetail({ listing, user, onBack, onMessage, onProfile, onStatusCh
           </div>
           {listing.description && <div className="listing-description"><span>SELLER DESCRIPTION</span><p>{listing.description}</p></div>}
           <button className="profile-link" onClick={() => onProfile(listing.seller_id)}>VIEW SELLER PROFILE</button>
-          {listing.seller_id !== user.uid ? <button className="primary message-cta" onClick={onMessage}>MESSAGE SELLER</button> : <div className="owner-status-controls"><span>YOUR LISTING: {listing.status}</span><button onClick={() => onStatusChange(listing, 'Pending')}>MARK PENDING</button><button onClick={() => onStatusChange(listing, 'Sold')}>MARK SOLD</button></div>}
+          {listing.seller_id !== user.uid ? <button className="primary message-cta" onClick={onMessage}>MESSAGE SELLER</button> : <div className="owner-status-controls"><span>YOUR LISTING: {listing.status}</span><a href={`/sell/?edit=${listing.id}`}>EDIT LISTING</a><button onClick={() => onStatusChange(listing, 'Available')}>MARK AVAILABLE</button><button onClick={() => onStatusChange(listing, 'Pending')}>MARK PENDING</button><button onClick={() => onStatusChange(listing, 'Sold')}>MARK SOLD</button></div>}
           <div className="detail-safety">Meet in a public campus location. Inspect the physical book before sending money.</div>
         </aside>
       </div>
@@ -542,7 +576,7 @@ function Profile({ userId, listings, onClose, standalone = false }) {
   const approvedReviews = reviews.filter((review) => review.approval_status === 'Approved')
   const average = approvedReviews.length ? approvedReviews.reduce((sum, review) => sum + Number(review.rating || 0), 0) / approvedReviews.length : 0
 
-  return <div className={standalone ? 'public-profile-page' : 'overlay'} role={standalone ? undefined : 'dialog'} aria-modal={standalone ? undefined : 'true'}><section className={standalone ? 'profile-modal public-profile-card' : 'modal profile-modal'}><button className="close" onClick={onClose}>×</button><div className="profile-avatar">{(profile?.display_name || 'S').charAt(0)}</div><p className="eyebrow">STUDENT PROFILE</p><h2>{profile?.display_name || 'Student'}</h2><p className="profile-school">{profile?.campus || 'School not listed'}</p><div className="profile-stats"><div><strong>{average ? average.toFixed(1) : 'N/A'}</strong><span>RATING</span></div><div><strong>{approvedReviews.length}</strong><span>REVIEWS</span></div><div><strong>{selling.length}</strong><span>FOR SALE</span></div></div><h3>Currently selling</h3><div className="profile-listings">{selling.length ? selling.map((item) => <div key={item.id}><img src={item.photo_url} alt="" /><span>{item.title}</span><b>${Number(item.price).toFixed(2)}</b></div>) : <p className="empty">No active listings.</p>}</div><h3>Reviews</h3><div className="review-list">{approvedReviews.length ? approvedReviews.map((review) => <article key={review.id}><b>{'★'.repeat(Math.round(review.rating))}</b><p>{review.comment}</p></article>) : <p className="empty">No reviews yet.</p>}</div></section></div>
+  return <div className={standalone ? 'public-profile-page' : 'overlay'} role={standalone ? undefined : 'dialog'} aria-modal={standalone ? undefined : 'true'}><section className={standalone ? 'profile-modal public-profile-card' : 'modal profile-modal'}><button className="close" onClick={onClose}>×</button><div className="profile-avatar">{(profile?.display_name || 'S').charAt(0)}</div><p className="eyebrow">STUDENT SELLER</p><h2>{profile?.display_name || 'Student'}</h2><p className="profile-school">{profile?.campus || 'School not listed'}</p><div className="profile-stats"><div><strong>{average ? average.toFixed(1) : 'N/A'}</strong><span>RATING</span></div><div><strong>{approvedReviews.length}</strong><span>REVIEWS</span></div><div><strong>{selling.length}</strong><span>FOR SALE</span></div></div><h3>Books for sale</h3><div className="profile-listings">{selling.length ? selling.map((item) => <div key={item.id}><img src={item.photo_url} alt="" /><span>{item.title}</span><b>${Number(item.price).toFixed(2)}</b></div>) : <p className="empty">No books listed right now.</p>}</div><h3>Reviews</h3><div className="review-list">{approvedReviews.length ? approvedReviews.map((review) => <article key={review.id}><b>{'★'.repeat(Math.round(review.rating))}</b><p>{review.comment}</p></article>) : <p className="empty">No reviews have been left yet.</p>}</div></section></div>
 }
 
 function MyProfile({ user, listings, onStatusChange }) {
@@ -634,13 +668,13 @@ function MyProfile({ user, listings, onStatusChange }) {
   return <main className="my-profile-page">
     <section className="profile-hero">
       <div className="profile-photo-wrap">{profile?.photo_url || user.photoURL ? <img src={profile?.photo_url || user.photoURL} alt="" /> : <span>{(profile?.display_name || user.displayName || 'S').charAt(0)}</span>}<label><input type="file" accept="image/png, image/jpeg" onChange={uploadAvatar} />CHANGE PHOTO</label></div>
-      <div><p className="eyebrow">YOUR PROFILE</p><h1>{profile?.display_name || user.displayName || 'Student'}</h1>{profile?.username && <p className="profile-username">@{profile.username}</p>}<p>{profile?.campus || 'No school selected'} · {user.email}</p></div>
+      <div><p className="eyebrow">YOUR ACCOUNT</p><h1>{profile?.display_name || user.displayName || 'Student'}</h1>{profile?.username && <p className="profile-username">@{profile.username}</p>}<p>{profile?.campus || 'No school selected'} · {user.email}</p></div>
     </section>
     <section className="identity-card"><div><label>First name<input value={profile?.first_name || ''} readOnly /></label><label>Last name<input value={profile?.last_name || ''} readOnly /></label><label>Email<input value={user.email || ''} readOnly /></label></div><div className="editable-profile-fields"><form onSubmit={saveUsername}><label>Username<input value={username} onChange={(e) => setUsername(e.target.value)} minLength="6" pattern="[A-Za-z_]+" placeholder="student_name" readOnly={Boolean(profile?.username)} required /></label><small>{profile?.username ? 'Your username is permanent. Inappropriate usernames may be removed by moderation.' : 'At least 6 characters. Letters and underscores only. Choose carefully. Your username can only be set once.'}</small>{!profile?.username && <button className="primary">SET USERNAME</button>}</form><form onSubmit={saveSchool}><label>School<input list="school-options" value={campus} onChange={(e) => setCampus(e.target.value)} placeholder="Choose or type your school" /></label><small>Choose a suggestion or enter your school manually.</small><button className="primary">SAVE SCHOOL</button></form></div></section>
     {!hasPassword && <form className="password-card" onSubmit={addPassword}><div><strong>Add password sign-in</strong><p>Your Google account remains connected. This adds email/password as another sign-in method.</p></div><input type="password" minLength="6" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="New password" required /><button className="primary">ADD PASSWORD</button></form>}
     {notice && <p className="profile-notice">{notice}</p>}
-    <section className="profile-dashboard"><div className="profile-section-head"><h2>Your listings</h2><span>{active.length} active · {sold.length} sold</span></div><div className="dashboard-listings">{[...active, ...sold].map((item) => <article key={item.id}><img src={item.photo_url} alt="" /><div><span>{item.status}</span><strong>{item.title}</strong><p>${Number(item.price).toFixed(2)} · {item.condition || 'Condition not set'}</p></div><select value={item.status} onChange={(e) => onStatusChange(item, e.target.value)}><option>Available</option><option>Pending</option><option>Sold</option></select></article>)}</div></section>
-    <section className="profile-dashboard"><div className="profile-section-head"><h2>Your reviews</h2><div className="review-tabs"><button className={reviewTab === 'seller' ? 'active' : ''} onClick={() => setReviewTab('seller')}>AS SELLER</button><button className={reviewTab === 'buyer' ? 'active' : ''} onClick={() => setReviewTab('buyer')}>AS BUYER</button></div></div><div className="received-reviews">{received.length ? received.map((review) => <article key={review.id}><b>{'★'.repeat(Math.round(review.rating))}</b><p>{review.comment}</p></article>) : <p className="empty">No {reviewTab} reviews yet.</p>}</div></section>
+    <section className="profile-dashboard"><div className="profile-section-head"><h2>Your books</h2><span>{active.length} active · {sold.length} sold</span></div><div className="dashboard-listings">{[...active, ...sold].map((item) => <article key={item.id}><img src={item.photo_url} alt="" /><div><span>{item.status}</span><strong>{item.title}</strong><p>${Number(item.price).toFixed(2)} · {item.condition || 'Condition not set'}</p></div><div className="profile-listing-actions"><a href={`/listing/?id=${item.id}`}>VIEW</a><a href={`/sell/?edit=${item.id}`}>EDIT</a><select value={item.status} onChange={(e) => onStatusChange(item, e.target.value)}><option>Available</option><option>Pending</option><option>Sold</option></select></div></article>)}</div></section>
+    <section className="profile-dashboard"><div className="profile-section-head"><h2>Reviews from other students</h2><div className="review-tabs"><button className={reviewTab === 'seller' ? 'active' : ''} onClick={() => setReviewTab('seller')}>AS SELLER</button><button className={reviewTab === 'buyer' ? 'active' : ''} onClick={() => setReviewTab('buyer')}>AS BUYER</button></div></div><div className="received-reviews">{received.length ? received.map((review) => <article key={review.id}><b>{'★'.repeat(Math.round(review.rating))}</b><p>{review.comment}</p></article>) : <p className="empty">No {reviewTab} reviews yet.</p>}</div></section>
     <section className="profile-dashboard"><div className="profile-section-head"><h2>Reviews you wrote</h2></div><WrittenReviews user={user} onEdit={editReview} /></section>
   </main>
 }
@@ -658,10 +692,55 @@ function Footer() {
 function WelcomePage({ user }) {
   return <main className="welcome-page">
     <nav className="welcome-nav"><a href="/"><img src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" /></a><div><a href="/terms/">POLICIES</a>{user ? <><a href="/marketplace/">MARKETPLACE</a><a className="welcome-button" href="/profile/">MY PROFILE</a></> : <><a href="/login/">SIGN IN</a><a className="welcome-button" href="/login/?mode=signup">JOIN THE BOARD</a></>}</div></nav>
-    <section className="welcome-hero"><div><p className="eyebrow">A STUDENT TEXTBOOK BULLETIN</p><h1>Books cost enough.<br /><em>Buying them shouldn’t.</em></h1><p>Find physical textbooks from students near you, list books you no longer need, and arrange safe local pickup without marketplace clutter.</p><div className="welcome-actions">{user ? <a className="primary" href="/marketplace/">BROWSE THE MARKETPLACE</a> : <><a className="primary" href="/login/?mode=signup">CREATE AN ACCOUNT</a><a href="/login/">I ALREADY HAVE AN ACCOUNT</a></>}</div></div><img src="/sticky-note.png" alt="" /></section>
-    <section className="welcome-features"><article><span>01</span><h2>List the exact book</h2><p>Course code, ISBN, condition, photos, location, and pickup preference.</p></article><article><span>02</span><h2>Talk directly</h2><p>Private student messaging with safety reminders and reporting tools.</p></article><article><span>03</span><h2>Meet safely</h2><p>Inspect the physical book in a public place before sending payment.</p></article></section>
+    <section className="welcome-hero"><div><p className="eyebrow">BUY AND SELL TEXTBOOKS LOCALLY</p><h1>The right book.<br /><em>At a fair price.</em></h1><p>Find the edition you need, sell the books you are finished with, and arrange a safe local exchange.</p><div className="welcome-actions">{user ? <a className="primary" href="/marketplace/">FIND A TEXTBOOK</a> : <><a className="primary" href="/login/?mode=signup">CREATE AN ACCOUNT</a><a href="/login/">I ALREADY HAVE AN ACCOUNT</a></>}</div></div><img src="/sticky-note.png" alt="" /></section>
+    <section className="welcome-features"><article><span>01</span><h2>Make a useful listing</h2><p>Give buyers the course, ISBN, condition, photos, and pickup details they actually need.</p></article><article><span>02</span><h2>Ask before you buy</h2><p>Message the seller directly and clear up the details before meeting.</p></article><article><span>03</span><h2>Exchange with confidence</h2><p>Meet somewhere public, check the book in person, and only pay when you are satisfied.</p></article></section>
     <Footer />
   </main>
+}
+
+function AdminListingCard({ listing }) {
+  const photos = listing.photo_urls?.length ? listing.photo_urls : [listing.photo_url].filter(Boolean)
+
+  async function editDetails() {
+    const title = window.prompt('Book title', listing.title)
+    if (title === null) return
+    const author = window.prompt('Author', listing.author)
+    if (author === null) return
+    const description = window.prompt('Description', listing.description || '')
+    if (description === null) return
+    const price = window.prompt('Price', listing.price)
+    if (price === null || Number.isNaN(Number(price))) return
+    const location = window.prompt('Area or neighborhood', listing.location || '')
+    if (location === null) return
+    const pickup = window.prompt('Pickup preference', listing.pickup_preference || 'Public meetup')
+    if (pickup === null) return
+    await updateDoc(doc(db, 'listings', listing.id), {
+      title: title.trim(),
+      author: author.trim(),
+      description: description.trim(),
+      price: Number(price),
+      location: location.trim(),
+      pickup_preference: pickup.trim(),
+    })
+  }
+
+  async function removePhoto(photo) {
+    if (photos.length <= 1 || !window.confirm('Remove this photo from the listing?')) return
+    const photo_urls = photos.filter((item) => item !== photo)
+    await updateDoc(doc(db, 'listings', listing.id), { photo_urls, photo_url: photo_urls[0] })
+  }
+
+  return <article className="admin-card admin-listing-card">
+    <div className="admin-photo-strip">{photos.map((photo, index) => <div key={photo}><img src={photo} alt={`${listing.title} photo ${index + 1}`} />{photos.length > 1 && <button onClick={() => removePhoto(photo)}>REMOVE</button>}</div>)}</div>
+    <div className="admin-card-content">
+      <div className="admin-meta"><span>{listing.approval_status || 'Pending'}</span><span>{listing.status}</span><span>{listing.campus || 'No school'}</span></div>
+      <h2>{listing.title}</h2>
+      <dl className="admin-listing-details"><dt>Author</dt><dd>{listing.author}</dd><dt>ISBN</dt><dd>{listing.isbn_sanitized}</dd><dt>Published</dt><dd>{listing.year_published}</dd><dt>Course</dt><dd>{listing.course_subject} {listing.course_number}</dd><dt>Condition</dt><dd>{listing.condition}</dd><dt>Price</dt><dd>${Number(listing.price).toFixed(2)}</dd><dt>Area</dt><dd>{listing.location || 'Not provided'}</dd><dt>Pickup</dt><dd>{listing.pickup_preference || 'Not provided'}</dd><dt>Access code</dt><dd>{listing.has_code ? 'Included' : 'Not included'}</dd></dl>
+      <p className="admin-description">{listing.description || 'No description provided.'}</p>
+      <small>Seller UID: {listing.seller_id}</small>
+      <div className="admin-actions"><button onClick={editDetails}>EDIT DETAILS</button><button onClick={() => updateDoc(doc(db, 'listings', listing.id), { approval_status: 'Approved' })}>APPROVE</button><button onClick={() => updateDoc(doc(db, 'listings', listing.id), { approval_status: 'Rejected' })}>REJECT</button></div>
+    </div>
+  </article>
 }
 
 function AdminDashboard({ user }) {
@@ -698,11 +777,11 @@ function AdminDashboard({ user }) {
   }
 
   return <main className="admin-shell">
-    <header className="admin-header"><div><img className="admin-logo" src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" /><h1>Admin desk</h1></div><div><span>{user.email}</span><button onClick={() => signOut(auth)}>SIGN OUT</button></div></header>
+    <header className="admin-header"><div><img className="admin-logo" src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" /><h1>Moderation</h1></div><div><span>{user.email}</span><button onClick={() => signOut(auth)}>SIGN OUT</button></div></header>
     <nav className="admin-tabs"><button className={tab === 'listings' ? 'active' : ''} onClick={() => setTab('listings')}>LISTINGS <b>{pendingListings.length}</b></button><button className={tab === 'reviews' ? 'active' : ''} onClick={() => setTab('reviews')}>REVIEWS <b>{pendingReviews.length}</b></button><button className={tab === 'reports' ? 'active' : ''} onClick={() => setTab('reports')}>REPORTS <b>{openReports.length}</b></button><button className={tab === 'users' ? 'active' : ''} onClick={() => setTab('users')}>USERS <b>{users.length}</b></button></nav>
-    {tab === 'listings' && <section className="admin-queue">{listings.length ? listings.map((listing) => <article className="admin-card" key={listing.id}><img src={listing.photo_url} alt="" /><div className="admin-card-content"><div className="admin-meta"><span>{listing.approval_status || 'Pending'}</span><span>{listing.status}</span><span>{listing.campus || 'No school'}</span></div><h2>{listing.title}</h2><p>{listing.author} · {listing.year_published} · ISBN {listing.isbn_sanitized}</p><p><b>{listing.course_subject} {listing.course_number}</b> · {listing.condition} · ${Number(listing.price).toFixed(2)}</p><p className="admin-description">{listing.description || 'No description provided.'}</p><small>Seller UID: {listing.seller_id}</small><div className="admin-actions"><button onClick={() => updateDoc(doc(db, 'listings', listing.id), { approval_status: 'Approved' })}>APPROVE</button><button onClick={() => updateDoc(doc(db, 'listings', listing.id), { approval_status: 'Rejected' })}>REJECT</button></div></div></article>) : <p className="admin-empty">No listings submitted.</p>}</section>}
-    {tab === 'reviews' && <section className="admin-queue">{reviews.length ? reviews.map((review) => <article className="admin-card review-admin-card" key={review.id}><div className="admin-card-content"><div className="admin-meta"><span>{review.approval_status || 'Pending'}</span><span>{review.role || 'seller'} review</span></div><h2>{'★'.repeat(Math.round(review.rating || 0))}</h2><p className="admin-description">{review.comment}</p><small>From {review.reviewer_id} → {review.reviewee_id}</small><div className="admin-actions"><button onClick={() => updateDoc(doc(db, 'reviews', review.id), { approval_status: 'Approved' })}>APPROVE</button><button onClick={() => updateDoc(doc(db, 'reviews', review.id), { approval_status: 'Rejected' })}>REJECT</button></div></div></article>) : <p className="admin-empty">No reviews submitted.</p>}</section>}
-    {tab === 'reports' && <section className="admin-queue">{reports.length ? reports.map((report) => <details className="report-card" key={report.id}><summary><div><span>{report.status || 'Open'}</span><strong>{report.report_type?.toUpperCase()} REPORT</strong><p>{report.target_email || report.target_user_id || report.target_id}</p></div><time>{formatDate(report.created_at)}</time></summary><div className="report-body"><dl><dt>Reported user</dt><dd>{report.target_email || 'Unknown email'} ({report.target_user_id || 'No UID'})</dd><dt>Reporter</dt><dd>{report.reporter_email || report.reporter_id}</dd><dt>Reason</dt><dd>{report.reason}</dd><dt>Context</dt><dd>{report.context || 'No additional context'}</dd><dt>Listing</dt><dd>{report.listing_id || 'N/A'}</dd></dl><h3>Chat transcript</h3><div className="admin-transcript">{report.transcript?.length ? report.transcript.map((message, index) => <div key={`${message.created_at}-${index}`}><span>{message.sender_id}</span><p>{message.message_text}</p><time>{message.created_at || 'Unknown time'}</time></div>) : <p>No transcript was available.</p>}</div><button className="resolve-button" onClick={() => updateDoc(doc(db, 'reports', report.id), { status: 'Resolved', resolved_at: serverTimestamp() })}>MARK RESOLVED</button></div></details>) : <p className="admin-empty">No reports submitted.</p>}</section>}
+    {tab === 'listings' && <section className="admin-queue">{listings.length ? listings.map((listing) => <AdminListingCard key={listing.id} listing={listing} />) : <p className="admin-empty">There are no listings to review.</p>}</section>}
+    {tab === 'reviews' && <section className="admin-queue">{reviews.length ? reviews.map((review) => <article className="admin-card review-admin-card" key={review.id}><div className="admin-card-content"><div className="admin-meta"><span>{review.approval_status || 'Pending'}</span><span>{review.role || 'seller'} review</span></div><h2>{'★'.repeat(Math.round(review.rating || 0))}</h2><p className="admin-description">{review.comment}</p><small>From {review.reviewer_id} → {review.reviewee_id}</small><div className="admin-actions"><button onClick={() => updateDoc(doc(db, 'reviews', review.id), { approval_status: 'Approved' })}>APPROVE</button><button onClick={() => updateDoc(doc(db, 'reviews', review.id), { approval_status: 'Rejected' })}>REJECT</button></div></div></article>) : <p className="admin-empty">There are no reviews to moderate.</p>}</section>}
+    {tab === 'reports' && <section className="admin-queue">{reports.length ? reports.map((report) => <details className="report-card" key={report.id}><summary><div><span>{report.status || 'Open'}</span><strong>{report.report_type?.toUpperCase()} REPORT</strong><p>{report.target_email || report.target_user_id || report.target_id}</p></div><time>{formatDate(report.created_at)}</time></summary><div className="report-body"><dl><dt>Reported user</dt><dd>{report.target_email || 'Unknown email'} ({report.target_user_id || 'No UID'})</dd><dt>Reporter</dt><dd>{report.reporter_email || report.reporter_id}</dd><dt>Reason</dt><dd>{report.reason}</dd><dt>Context</dt><dd>{report.context || 'No additional context'}</dd><dt>Listing</dt><dd>{report.listing_id || 'N/A'}</dd></dl><h3>Chat transcript</h3><div className="admin-transcript">{report.transcript?.length ? report.transcript.map((message, index) => <div key={`${message.created_at}-${index}`}><span>{message.sender_id}</span><p>{message.message_text}</p><time>{message.created_at || 'Unknown time'}</time></div>) : <p>This report does not include a conversation transcript.</p>}</div><button className="resolve-button" onClick={() => updateDoc(doc(db, 'reports', report.id), { status: 'Resolved', resolved_at: serverTimestamp() })}>MARK RESOLVED</button></div></details>) : <p className="admin-empty">No reports submitted.</p>}</section>}
     {tab === 'users' && <section className="admin-queue admin-users">{users.length ? users.map((profile) => <article className="admin-user-card" key={profile.id}><div className="admin-user-avatar">{profile.photo_url ? <img src={profile.photo_url} alt="" /> : (profile.display_name || profile.first_name || 'S').charAt(0)}</div><div><strong>{profile.display_name || `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Unnamed user'}</strong><span>{profile.username ? `@${profile.username}` : 'No username set'}</span><p>{profile.email || 'No email'} · {profile.campus || 'No school selected'}</p><small>UID: {profile.uid || profile.id}</small></div><div className="admin-user-actions"><button onClick={() => editUserSchool(profile)}>EDIT SCHOOL</button>{profile.username && <button onClick={() => removeUsername(profile)}>REMOVE USERNAME</button>}</div></article>) : <p className="admin-empty">No users found.</p>}</section>}
   </main>
 }
@@ -720,7 +799,7 @@ function Inbox({ listings, activeChat, onOpenChat, buyingChats, sellingChats, us
       <aside className="chat-sidebar">
         <div className="inbox-heading"><div><p className="eyebrow">YOUR CONVERSATIONS</p><h1>Messages</h1></div><div className="inbox-tabs"><button className={tab === 'buying' ? 'active' : ''} onClick={() => setTab('buying')}>BUYING</button><button className={tab === 'selling' ? 'active' : ''} onClick={() => setTab('selling')}>SELLING</button></div></div>
         <div className="conversation-list">
-        {chats.length === 0 && <div className="inbox-empty"><strong>No {tab} conversations yet.</strong><p>{tab === 'buying' ? 'Open a listing to contact its seller.' : 'Buyer messages about your listings will appear here.'}</p></div>}
+        {chats.length === 0 && <div className="inbox-empty"><strong>No {tab} conversations.</strong><p>{tab === 'buying' ? 'Open a book listing when you are ready to contact a seller.' : 'Messages from interested buyers will show up here.'}</p></div>}
         {chats.map((chat) => {
           const listing = listings.find((item) => item.id === chat.listing_id)
           if (!listing) return null
@@ -730,7 +809,7 @@ function Inbox({ listings, activeChat, onOpenChat, buyingChats, sellingChats, us
         </div>
       </aside>
       <section className="workspace-thread">
-        {activeChat ? <Chat embedded user={user} listing={activeChat.listing} conversation={activeChat.conversation} onClose={() => onOpenChat(null)} onProfile={onProfile} onStatusChange={onStatusChange} /> : <div className="select-chat"><img src="/sticky-note.png" alt="" /><strong>Select a conversation</strong><p>Your messages will appear here.</p></div>}
+        {activeChat ? <Chat embedded user={user} listing={activeChat.listing} conversation={activeChat.conversation} onClose={() => onOpenChat(null)} onProfile={onProfile} onStatusChange={onStatusChange} /> : <div className="select-chat"><img src="/sticky-note.png" alt="" /><strong>Choose a conversation</strong><p>Pick a chat from the left to read and reply.</p></div>}
       </section>
     </main>
   )
@@ -739,6 +818,7 @@ function Inbox({ listings, activeChat, onOpenChat, buyingChats, sellingChats, us
 function App() {
   const [user, setUser] = useState(undefined)
   const [listings, setListings] = useState([])
+  const [listingsReady, setListingsReady] = useState(false)
   const [campus, setCampus] = useState('')
   const [course, setCourse] = useState('')
   const [isbn, setIsbn] = useState('')
@@ -769,9 +849,15 @@ function App() {
   }, [page, activeListing?.id])
 
   useEffect(() => {
+    document.body.classList.toggle('chat-page-locked', page === 'chats')
+    return () => document.body.classList.remove('chat-page-locked')
+  }, [page])
+
+  useEffect(() => {
     if (!user) return undefined
     return onSnapshot(collection(db, 'listings'), (snapshot) => {
       setListings(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))
+      setListingsReady(true)
     })
   }, [user])
 
@@ -808,6 +894,8 @@ function App() {
   }, [page, listings, buyingChats, sellingChats])
 
   const unreadChats = buyingChats.filter((chat) => chat.buyer_unread).length + sellingChats.filter((chat) => chat.seller_unread).length
+  const editListingId = page === 'sell' ? new URLSearchParams(window.location.search).get('edit') : null
+  const editingListing = editListingId ? listings.find((item) => item.id === editListingId && item.seller_id === user?.uid) : null
 
   async function changeListingStatus(listing, status) {
     if (listing.seller_id !== user.uid || listing.status === status) return
@@ -878,13 +966,13 @@ function App() {
         <a className="brand" href="/"><img src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" /></a>
         <nav><a className={`nav-link ${page === 'market' ? 'active' : ''}`} href="/marketplace/">MARKETPLACE</a><a className={`nav-link chat-nav ${page === 'chats' ? 'active' : ''}`} href="/chats/">CHATS{unreadChats > 0 && <b>{unreadChats}</b>}</a><a className={`nav-link ${page === 'profile' ? 'active' : ''}`} href="/profile/">PROFILE</a><span className="user-email">{user.displayName || user.email}</span><a className="outline" href="/sell/">SELL A BOOK</a><button className="logout" onClick={async () => { await signOut(auth); window.location.assign('/login/') }}>LOG OUT</button></nav>
       </header>
-      {page === 'sell' ? <ListingForm standalone user={user} onClose={() => window.location.assign('/marketplace/')} /> : page === 'profile' ? <MyProfile user={user} listings={listings} onStatusChange={changeListingStatus} /> : page === 'user' ? (profileId ? <Profile standalone userId={profileId} listings={listings} onClose={() => window.location.assign('/')} /> : <main className="page-message"><h1>User not found.</h1></main>) : page === 'chats' ? <Inbox user={user} listings={listings} buyingChats={buyingChats} sellingChats={sellingChats} activeChat={activeChat} onOpenChat={(conversation) => window.location.assign(conversation ? `/chats/?chat=${conversation.id}` : '/chats/')} onProfile={(id) => window.location.assign(`/user/?id=${id}`)} onStatusChange={changeListingStatus} /> : page === 'listing' ? (
+      {page === 'sell' ? (editListingId ? (editingListing ? <ListingForm standalone user={user} editingListing={editingListing} onClose={() => window.location.assign(`/listing/?id=${editingListing.id}`)} /> : listingsReady ? <main className="page-message"><h1>Listing not found.</h1><p>You can only edit listings that belong to your account.</p><a href="/profile/">Back to profile</a></main> : <div className="loading"><img src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" /></div>) : <ListingForm standalone user={user} onClose={() => window.location.assign('/marketplace/')} />) : page === 'profile' ? <MyProfile user={user} listings={listings} onStatusChange={changeListingStatus} /> : page === 'user' ? (profileId ? <Profile standalone userId={profileId} listings={listings} onClose={() => window.location.assign('/')} /> : <main className="page-message"><h1>User not found.</h1></main>) : page === 'chats' ? <Inbox user={user} listings={listings} buyingChats={buyingChats} sellingChats={sellingChats} activeChat={activeChat} onOpenChat={(conversation) => window.location.assign(conversation ? `/chats/?chat=${conversation.id}` : '/chats/')} onProfile={(id) => window.location.assign(`/user/?id=${id}`)} onStatusChange={changeListingStatus} /> : page === 'listing' ? (
         activeListing ? <ListingDetail listing={activeListing} user={user} onBack={() => window.location.assign('/marketplace/')} onMessage={() => window.location.assign(`/chats/?listing=${activeListing.id}`)} onProfile={(id) => window.location.assign(`/user/?id=${id}`)} onStatusChange={changeListingStatus} /> : <main className="page-message"><h1>Listing not found.</h1><a href="/marketplace/">Back to marketplace</a></main>
       ) : <main className="market">
         <aside>
-          <p className="eyebrow">THE LOCAL BOOK BOARD</p>
-          <h1>Find the book.<br /><em>Skip the markup.</em></h1>
-          <p className="aside-copy">Search physical textbooks listed by students near you.</p>
+          <p className="eyebrow">TEXTBOOKS NEAR YOU</p>
+          <h1>Find your book.<br /><em>Pay a fair price.</em></h1>
+          <p className="aside-copy">Search by school, course, or ISBN and buy directly from another student.</p>
           <label>School<select value={campus} onChange={(e) => setCampus(e.target.value)}><option value="">Any school</option>{institutions.map((item) => <option key={item}>{item}</option>)}</select></label>
           <label>Course code<input value={course} onChange={(e) => setCourse(e.target.value)} placeholder="e.g. ECON 101" /></label>
           <label>ISBN<input inputMode="numeric" value={isbn} onChange={(e) => setIsbn(sanitizeISBN(e.target.value))} placeholder="Digits only" /></label>
@@ -892,7 +980,7 @@ function App() {
           <button className="text-button clear" onClick={() => { setCampus(''); setCourse(''); setIsbn('') }}>CLEAR FILTERS</button>
         </aside>
         <section className="results">
-          <div className="results-head"><div><p className="eyebrow">FRESH ON THE BOARD</p><h2>{visible.length} {visible.length === 1 ? 'book' : 'books'} available</h2></div></div>
+          <div className="results-head"><div><p className="eyebrow">AVAILABLE BOOKS</p><h2>{visible.length} {visible.length === 1 ? 'book' : 'books'} available</h2></div></div>
           <div className="grid">
             {visible.map((listing) => (
               <article className="card" key={listing.id}>
@@ -901,10 +989,10 @@ function App() {
               </article>
             ))}
           </div>
-          {visible.length === 0 && <div className="no-results"><strong>Nothing here yet.</strong><p>Try clearing a filter, or be the first to list a book.</p><a className="primary" href="/sell/">SELL A BOOK</a></div>}
+          {visible.length === 0 && <div className="no-results"><strong>No matching books found.</strong><p>Try fewer filters, or add the first listing for this search.</p><a className="primary" href="/sell/">SELL A BOOK</a></div>}
         </section>
       </main>}
-      <Footer />
+      {page !== 'chats' && <Footer />}
     </>
   )
 }
