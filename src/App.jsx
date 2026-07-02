@@ -18,11 +18,15 @@ import {
 } from 'firebase/firestore'
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage'
 import { auth, db, storage } from './lib/firebase'
-import { isAllowedStudentEmail, sanitizeISBN } from './lib/validation'
+import { sanitizeISBN } from './lib/validation'
 
-const CAMPUSES = ['MacEwan', 'University of Alberta', 'University of Calgary', 'NAIT', 'Mount Royal']
+const SCHOOL_SUGGESTIONS = [
+  'University of Alberta', 'MacEwan University', 'NAIT', 'NorQuest College',
+  'University of Calgary', 'Mount Royal University', 'SAIT', 'Bow Valley College',
+  'High School',
+]
 const emptyListing = {
-  title: '', author: '', isbn: '', year_published: '', campus: CAMPUSES[0],
+  title: '', author: '', isbn: '', year_published: '', campus: '',
   course_subject: '', course_number: '', price: '', has_code: false,
 }
 
@@ -30,16 +34,12 @@ function AuthScreen() {
   const [mode, setMode] = useState('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [campus, setCampus] = useState(CAMPUSES[0])
+  const [campus, setCampus] = useState('')
   const [error, setError] = useState('')
 
   async function submit(event) {
     event.preventDefault()
     setError('')
-    if (!isAllowedStudentEmail(email)) {
-      setError('Use an approved Edmonton or Calgary institutional email.')
-      return
-    }
     try {
       if (mode === 'signup') {
         const result = await createUserWithEmailAndPassword(auth, email, password)
@@ -59,10 +59,11 @@ function AuthScreen() {
 
   return (
     <main className="auth-shell">
+      <datalist id="school-options">{SCHOOL_SUGGESTIONS.map((item) => <option key={item} value={item} />)}</datalist>
       <section className="auth-panel">
-        <p className="eyebrow">EDMONTON / CALGARY</p>
-        <h1>Books should<br />change hands.</h1>
-        <p className="muted">A local, student-only marketplace for physical textbooks.</p>
+        <p className="eyebrow">BUILT FOR STUDENTS</p>
+        <h1>Pass books<br />forward.</h1>
+        <p className="muted">A local marketplace for physical textbooks—from high school through university.</p>
       </section>
       <form className="auth-form" onSubmit={submit}>
         <div>
@@ -72,7 +73,7 @@ function AuthScreen() {
         <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
         <label>Password<input type="password" minLength="6" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
         {mode === 'signup' && (
-          <label>Campus<select value={campus} onChange={(e) => setCampus(e.target.value)}>{CAMPUSES.map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label>School <span className="optional">Optional</span><input list="school-options" value={campus} onChange={(e) => setCampus(e.target.value)} placeholder="College, university, or high school" /></label>
         )}
         {error && <p className="error">{error}</p>}
         <button className="primary" type="submit">{mode === 'signin' ? 'SIGN IN' : 'CREATE ACCOUNT'}</button>
@@ -134,7 +135,7 @@ function ListingForm({ user, onClose }) {
           <label>Author<input value={form.author} onChange={(e) => field('author', e.target.value)} required /></label>
           <label>ISBN<input inputMode="numeric" value={form.isbn} onChange={(e) => field('isbn', sanitizeISBN(e.target.value))} required /></label>
           <label>Year published<input type="number" min="1000" max="2100" value={form.year_published} onChange={(e) => field('year_published', e.target.value)} required /></label>
-          <label>Campus<select value={form.campus} onChange={(e) => field('campus', e.target.value)}>{CAMPUSES.map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label>School <span className="optional">Optional</span><input list="school-options" value={form.campus} onChange={(e) => field('campus', e.target.value)} placeholder="Type any school or choose High School" /></label>
           <label>Course subject<input placeholder="CMPT" value={form.course_subject} onChange={(e) => field('course_subject', e.target.value)} required /></label>
           <label>Course number<input placeholder="101" value={form.course_number} onChange={(e) => field('course_number', e.target.value)} required /></label>
           <label>Price (CAD)<input type="number" min="0" step="0.01" value={form.price} onChange={(e) => field('price', e.target.value)} required /></label>
@@ -221,14 +222,7 @@ function App() {
   const [createOpen, setCreateOpen] = useState(false)
   const [activeListing, setActiveListing] = useState(null)
 
-  useEffect(() => onAuthStateChanged(auth, async (nextUser) => {
-    if (nextUser && !isAllowedStudentEmail(nextUser.email)) {
-      await signOut(auth)
-      setUser(null)
-      return
-    }
-    setUser(nextUser)
-  }), [])
+  useEffect(() => onAuthStateChanged(auth, setUser), [])
 
   useEffect(() => {
     if (!user) return undefined
@@ -249,35 +243,41 @@ function App() {
     })
   }, [listings, campus, course, isbn])
 
+  const institutions = useMemo(() => (
+    [...new Set([...SCHOOL_SUGGESTIONS, ...listings.map((item) => item.campus).filter(Boolean)])].sort()
+  ), [listings])
+
   if (user === undefined) return <div className="loading">MYSTUDENTBULLETIN</div>
   if (!user) return <AuthScreen />
 
   return (
     <>
+      <datalist id="school-options">{SCHOOL_SUGGESTIONS.map((item) => <option key={item} value={item} />)}</datalist>
       <header>
-        <a className="brand" href="/">MSB<span>•</span></a>
-        <nav><span className="user-email">{user.email}</span><button className="outline" onClick={() => setCreateOpen(true)}>+ CREATE LISTING</button><button className="logout" onClick={() => signOut(auth)}>LOGOUT</button></nav>
+        <a className="brand" href="/"><span className="brand-mark">M</span><span className="brand-name">MyStudentBulletin</span></a>
+        <nav><span className="user-email">{user.email}</span><button className="outline" onClick={() => setCreateOpen(true)}>SELL A BOOK</button><button className="logout" onClick={() => signOut(auth)}>LOG OUT</button></nav>
       </header>
       <main className="market">
         <aside>
-          <p className="eyebrow">FILTER THE BOARD</p>
-          <h1>Find your<br />next text.</h1>
-          <label>Campus<select value={campus} onChange={(e) => setCampus(e.target.value)}><option value="">All campuses</option>{CAMPUSES.map((item) => <option key={item}>{item}</option>)}</select></label>
+          <p className="eyebrow">THE LOCAL BOOK BOARD</p>
+          <h1>Find the book.<br /><em>Skip the markup.</em></h1>
+          <p className="aside-copy">Search physical textbooks listed by students near you.</p>
+          <label>School<select value={campus} onChange={(e) => setCampus(e.target.value)}><option value="">Any school</option>{institutions.map((item) => <option key={item}>{item}</option>)}</select></label>
           <label>Course code<input value={course} onChange={(e) => setCourse(e.target.value)} placeholder="e.g. ECON 101" /></label>
           <label>ISBN<input inputMode="numeric" value={isbn} onChange={(e) => setIsbn(sanitizeISBN(e.target.value))} placeholder="Digits only" /></label>
           <button className="text-button clear" onClick={() => { setCampus(''); setCourse(''); setIsbn('') }}>CLEAR FILTERS</button>
         </aside>
         <section className="results">
-          <div className="results-head"><div><p className="eyebrow">AVAILABLE NOW</p><h2>{visible.length} physical {visible.length === 1 ? 'book' : 'books'}</h2></div><span>LOCAL PICKUP ONLY</span></div>
+          <div className="results-head"><div><p className="eyebrow">FRESH ON THE BOARD</p><h2>{visible.length} {visible.length === 1 ? 'book' : 'books'} available</h2></div><span><i /> IN-PERSON EXCHANGE</span></div>
           <div className="grid">
             {visible.map((listing) => (
               <article className="card" key={listing.id}>
-                <div className="image-wrap"><img src={listing.photo_url} alt="" /><span>{listing.campus}</span></div>
+                <div className="image-wrap"><img src={listing.photo_url} alt={`Cover of ${listing.title}`} />{listing.campus && <span>{listing.campus}</span>}<b>AVAILABLE</b></div>
                 <div className="card-body"><p className="course">{listing.course_subject} {listing.course_number}</p><h3>{listing.title}</h3><p className="author">{listing.author} · {listing.year_published}</p><div className="price-row"><strong>${Number(listing.price).toFixed(2)}</strong>{listing.has_code && <span>ACCESS CODE</span>}</div><button className="card-action" onClick={() => setActiveListing(listing)}>{listing.seller_id === user.uid ? 'VIEW LISTING' : 'MESSAGE SELLER'} →</button></div>
               </article>
             ))}
           </div>
-          {visible.length === 0 && <div className="no-results"><p>No books match those filters.</p><span>The board is quiet here—for now.</span></div>}
+          {visible.length === 0 && <div className="no-results"><strong>Nothing here yet.</strong><p>Try clearing a filter, or be the first to list a book.</p><button className="primary" onClick={() => setCreateOpen(true)}>SELL A BOOK</button></div>}
         </section>
       </main>
       {createOpen && <ListingForm user={user} onClose={() => setCreateOpen(false)} />}
