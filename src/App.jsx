@@ -38,7 +38,7 @@ const SCHOOL_SUGGESTIONS = [
   'University of Calgary', 'Mount Royal University', 'SAIT', 'Bow Valley College',
   'High School',
 ]
-const ADMIN_EMAIL = 'thenoxprojects@gmail.com'
+const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL?.trim().toLowerCase() || ''
 const emptyListing = {
   title: '', author: '', description: '', isbn: '', year_published: '', campus: '',
   course_subject: '', course_number: '', price: '', condition: 'Used - Good', has_code: false,
@@ -106,7 +106,7 @@ function AuthScreen({ onLegal }) {
       <datalist id="school-options">{SCHOOL_SUGGESTIONS.map((item) => <option key={item} value={item} />)}</datalist>
       <section className="auth-panel">
         <p className="eyebrow">BUILT FOR STUDENTS</p>
-        <h1>Pass books<br />forward.</h1>
+        <h1>Study more.<br />Spend less.</h1>
         <p className="muted">A local marketplace for physical textbooks—from high school through university.</p>
       </section>
       <form className="auth-form" onSubmit={submit}>
@@ -543,26 +543,28 @@ function MyProfile({ user, listings, onStatusChange }) {
 
   async function saveUsername(event) {
     event.preventDefault()
+    if (profile?.username) {
+      setNotice('Your username has already been set and cannot be changed.')
+      return
+    }
     const value = username.trim()
     if (!/^[A-Za-z_]{6,}$/.test(value)) {
       setNotice('Username must be at least 6 characters and use letters or underscores only.')
       return
     }
+    const confirmed = window.confirm(`Set your username to @${value}?\n\nUsernames can only be set once and cannot be changed later. Inappropriate usernames may be removed by moderation.`)
+    if (!confirmed) return
     const normalized = value.toLowerCase()
     try {
       await runTransaction(db, async (transaction) => {
         const userRef = doc(db, 'users', user.uid)
         const newUsernameRef = doc(db, 'usernames', normalized)
-        const oldNormalized = profile?.username?.toLowerCase()
-        const oldUsernameRef = oldNormalized && oldNormalized !== normalized ? doc(db, 'usernames', oldNormalized) : null
         const newUsername = await transaction.get(newUsernameRef)
-        const oldUsername = oldUsernameRef ? await transaction.get(oldUsernameRef) : null
         if (newUsername.exists() && newUsername.data().uid !== user.uid) throw new Error('That username is already taken.')
         transaction.set(newUsernameRef, { uid: user.uid, username: value })
         transaction.set(userRef, { username: value }, { merge: true })
-        if (oldUsernameRef && oldUsername?.data().uid === user.uid) transaction.delete(oldUsernameRef)
       })
-      setNotice('Username updated.')
+      setNotice('Username set successfully. It can no longer be changed.')
     } catch (caught) {
       setNotice(caught.message)
     }
@@ -584,7 +586,7 @@ function MyProfile({ user, listings, onStatusChange }) {
       <div className="profile-photo-wrap">{profile?.photo_url || user.photoURL ? <img src={profile?.photo_url || user.photoURL} alt="" /> : <span>{(profile?.display_name || user.displayName || 'S').charAt(0)}</span>}<label><input type="file" accept="image/png, image/jpeg" onChange={uploadAvatar} />CHANGE PHOTO</label></div>
       <div><p className="eyebrow">YOUR PROFILE</p><h1>{profile?.display_name || user.displayName || 'Student'}</h1>{profile?.username && <p className="profile-username">@{profile.username}</p>}<p>{profile?.campus || 'No school selected'} · {user.email}</p></div>
     </section>
-    <section className="identity-card"><div><label>First name<input value={profile?.first_name || ''} readOnly /></label><label>Last name<input value={profile?.last_name || ''} readOnly /></label><label>Email<input value={user.email || ''} readOnly /></label></div><div className="editable-profile-fields"><form onSubmit={saveUsername}><label>Username<input value={username} onChange={(e) => setUsername(e.target.value)} minLength="6" pattern="[A-Za-z_]+" placeholder="student_name" required /></label><small>At least 6 characters. Letters and underscores only. Usernames are unique.</small><button className="primary">SAVE USERNAME</button></form><form onSubmit={saveSchool}><label>School<input list="school-options" value={campus} onChange={(e) => setCampus(e.target.value)} placeholder="Choose or type your school" /></label><button className="primary">SAVE SCHOOL</button></form></div></section>
+    <section className="identity-card"><div><label>First name<input value={profile?.first_name || ''} readOnly /></label><label>Last name<input value={profile?.last_name || ''} readOnly /></label><label>Email<input value={user.email || ''} readOnly /></label></div><div className="editable-profile-fields"><form onSubmit={saveUsername}><label>Username<input value={username} onChange={(e) => setUsername(e.target.value)} minLength="6" pattern="[A-Za-z_]+" placeholder="student_name" readOnly={Boolean(profile?.username)} required /></label><small>{profile?.username ? 'Your username is permanent. Inappropriate usernames may be removed by moderation.' : 'At least 6 characters. Letters and underscores only. Choose carefully—your username can only be set once.'}</small>{!profile?.username && <button className="primary">SET USERNAME</button>}</form><form onSubmit={saveSchool}><label>School<input list="school-options" value={campus} onChange={(e) => setCampus(e.target.value)} placeholder="Choose or type your school" /></label><button className="primary">SAVE SCHOOL</button></form></div></section>
     {!hasPassword && <form className="password-card" onSubmit={addPassword}><div><strong>Add password sign-in</strong><p>Your Google account remains connected. This adds email/password as another sign-in method.</p></div><input type="password" minLength="6" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="New password" required /><button className="primary">ADD PASSWORD</button></form>}
     {notice && <p className="profile-notice">{notice}</p>}
     <section className="profile-dashboard"><div className="profile-section-head"><h2>Your listings</h2><span>{active.length} active · {sold.length} sold</span></div><div className="dashboard-listings">{[...active, ...sold].map((item) => <article key={item.id}><img src={item.photo_url} alt="" /><div><span>{item.status}</span><strong>{item.title}</strong><p>${Number(item.price).toFixed(2)} · {item.condition || 'Condition not set'}</p></div><select value={item.status} onChange={(e) => onStatusChange(item, e.target.value)}><option>Available</option><option>Pending</option><option>Sold</option></select></article>)}</div></section>
@@ -608,22 +610,41 @@ function AdminDashboard({ user }) {
   const [listings, setListings] = useState([])
   const [reviews, setReviews] = useState([])
   const [reports, setReports] = useState([])
+  const [users, setUsers] = useState([])
 
   useEffect(() => onSnapshot(collection(db, 'listings'), (snapshot) => setListings(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))), [])
   useEffect(() => onSnapshot(collection(db, 'reviews'), (snapshot) => setReviews(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))), [])
   useEffect(() => onSnapshot(collection(db, 'reports'), (snapshot) => setReports(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))), [])
+  useEffect(() => onSnapshot(collection(db, 'users'), (snapshot) => setUsers(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))), [])
 
   const pendingListings = listings.filter((item) => (item.approval_status || 'Pending') === 'Pending')
   const pendingReviews = reviews.filter((item) => (item.approval_status || 'Pending') === 'Pending')
   const openReports = reports.filter((item) => item.status !== 'Resolved')
   const formatDate = (timestamp) => timestamp?.toDate?.().toLocaleString() || 'Pending timestamp'
 
+  async function editUserSchool(profile) {
+    const campus = window.prompt('Update school', profile.campus || '')
+    if (campus === null) return
+    await updateDoc(doc(db, 'users', profile.id), { campus: campus.trim() })
+  }
+
+  async function removeUsername(profile) {
+    if (!profile.username || !window.confirm(`Remove @${profile.username}? The user will be able to choose a new username.`)) return
+    await runTransaction(db, async (transaction) => {
+      const usernameRef = doc(db, 'usernames', profile.username.toLowerCase())
+      const usernameRecord = await transaction.get(usernameRef)
+      if (usernameRecord.exists() && usernameRecord.data().uid === profile.id) transaction.delete(usernameRef)
+      transaction.update(doc(db, 'users', profile.id), { username: deleteField() })
+    })
+  }
+
   return <main className="admin-shell">
     <header className="admin-header"><div><p className="eyebrow">MYSTUDENTBULLETIN</p><h1>Admin desk</h1></div><div><span>{user.email}</span><button onClick={() => signOut(auth)}>SIGN OUT</button></div></header>
-    <nav className="admin-tabs"><button className={tab === 'listings' ? 'active' : ''} onClick={() => setTab('listings')}>LISTINGS <b>{pendingListings.length}</b></button><button className={tab === 'reviews' ? 'active' : ''} onClick={() => setTab('reviews')}>REVIEWS <b>{pendingReviews.length}</b></button><button className={tab === 'reports' ? 'active' : ''} onClick={() => setTab('reports')}>REPORTS <b>{openReports.length}</b></button></nav>
+    <nav className="admin-tabs"><button className={tab === 'listings' ? 'active' : ''} onClick={() => setTab('listings')}>LISTINGS <b>{pendingListings.length}</b></button><button className={tab === 'reviews' ? 'active' : ''} onClick={() => setTab('reviews')}>REVIEWS <b>{pendingReviews.length}</b></button><button className={tab === 'reports' ? 'active' : ''} onClick={() => setTab('reports')}>REPORTS <b>{openReports.length}</b></button><button className={tab === 'users' ? 'active' : ''} onClick={() => setTab('users')}>USERS <b>{users.length}</b></button></nav>
     {tab === 'listings' && <section className="admin-queue">{listings.length ? listings.map((listing) => <article className="admin-card" key={listing.id}><img src={listing.photo_url} alt="" /><div className="admin-card-content"><div className="admin-meta"><span>{listing.approval_status || 'Pending'}</span><span>{listing.status}</span><span>{listing.campus || 'No school'}</span></div><h2>{listing.title}</h2><p>{listing.author} · {listing.year_published} · ISBN {listing.isbn_sanitized}</p><p><b>{listing.course_subject} {listing.course_number}</b> · {listing.condition} · ${Number(listing.price).toFixed(2)}</p><p className="admin-description">{listing.description || 'No description provided.'}</p><small>Seller UID: {listing.seller_id}</small><div className="admin-actions"><button onClick={() => updateDoc(doc(db, 'listings', listing.id), { approval_status: 'Approved' })}>APPROVE</button><button onClick={() => updateDoc(doc(db, 'listings', listing.id), { approval_status: 'Rejected' })}>REJECT</button></div></div></article>) : <p className="admin-empty">No listings submitted.</p>}</section>}
     {tab === 'reviews' && <section className="admin-queue">{reviews.length ? reviews.map((review) => <article className="admin-card review-admin-card" key={review.id}><div className="admin-card-content"><div className="admin-meta"><span>{review.approval_status || 'Pending'}</span><span>{review.role || 'seller'} review</span></div><h2>{'★'.repeat(Math.round(review.rating || 0))}</h2><p className="admin-description">{review.comment}</p><small>From {review.reviewer_id} → {review.reviewee_id}</small><div className="admin-actions"><button onClick={() => updateDoc(doc(db, 'reviews', review.id), { approval_status: 'Approved' })}>APPROVE</button><button onClick={() => updateDoc(doc(db, 'reviews', review.id), { approval_status: 'Rejected' })}>REJECT</button></div></div></article>) : <p className="admin-empty">No reviews submitted.</p>}</section>}
     {tab === 'reports' && <section className="admin-queue">{reports.length ? reports.map((report) => <details className="report-card" key={report.id}><summary><div><span>{report.status || 'Open'}</span><strong>{report.report_type?.toUpperCase()} REPORT</strong><p>{report.target_email || report.target_user_id || report.target_id}</p></div><time>{formatDate(report.created_at)}</time></summary><div className="report-body"><dl><dt>Reported user</dt><dd>{report.target_email || 'Unknown email'} ({report.target_user_id || 'No UID'})</dd><dt>Reporter</dt><dd>{report.reporter_email || report.reporter_id}</dd><dt>Reason</dt><dd>{report.reason}</dd><dt>Context</dt><dd>{report.context || 'No additional context'}</dd><dt>Listing</dt><dd>{report.listing_id || 'N/A'}</dd></dl><h3>Chat transcript</h3><div className="admin-transcript">{report.transcript?.length ? report.transcript.map((message, index) => <div key={`${message.created_at}-${index}`}><span>{message.sender_id}</span><p>{message.message_text}</p><time>{message.created_at || 'Unknown time'}</time></div>) : <p>No transcript was available.</p>}</div><button className="resolve-button" onClick={() => updateDoc(doc(db, 'reports', report.id), { status: 'Resolved', resolved_at: serverTimestamp() })}>MARK RESOLVED</button></div></details>) : <p className="admin-empty">No reports submitted.</p>}</section>}
+    {tab === 'users' && <section className="admin-queue admin-users">{users.length ? users.map((profile) => <article className="admin-user-card" key={profile.id}><div className="admin-user-avatar">{profile.photo_url ? <img src={profile.photo_url} alt="" /> : (profile.display_name || profile.first_name || 'S').charAt(0)}</div><div><strong>{profile.display_name || `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Unnamed user'}</strong><span>{profile.username ? `@${profile.username}` : 'No username set'}</span><p>{profile.email || 'No email'} · {profile.campus || 'No school selected'}</p><small>UID: {profile.uid || profile.id}</small></div><div className="admin-user-actions"><button onClick={() => editUserSchool(profile)}>EDIT SCHOOL</button>{profile.username && <button onClick={() => removeUsername(profile)}>REMOVE USERNAME</button>}</div></article>) : <p className="admin-empty">No users found.</p>}</section>}
   </main>
 }
 
