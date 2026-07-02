@@ -110,6 +110,7 @@ function AuthScreen({ onLegal }) {
         <p className="muted">A local marketplace for physical textbooks—from high school through university.</p>
       </section>
       <form className="auth-form" onSubmit={submit}>
+        <img className="auth-logo" src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" />
         <div>
           <p className="eyebrow">MYSTUDENTBULLETIN</p>
           <h2>{mode === 'signin' ? 'Welcome back.' : 'Join the board.'}</h2>

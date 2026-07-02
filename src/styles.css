@@ -340,6 +340,7 @@ input::placeholder, textarea::placeholder { color: #9999a2; }
 .auth-divider { display: flex; align-items: center; gap: 10px; color: #8b8b94; font-size: .6rem; margin: 4px 0 16px; }
 .auth-divider::before, .auth-divider::after { content: ""; height: 1px; flex: 1; background: #dcdce1; }
 .google-button { width: 100%; padding: 14px; border: 1px solid #cfcfd6; color: #111114; background: #fff; font-size: .7rem; font-weight: 850; letter-spacing: .08em; }
+.auth-logo { width: min(320px, 78%); height: 92px; margin: 0 0 26px; object-fit: contain; object-position: left center; }
 
 /* Footer and legal pages */
 footer { min-height: 72px; display: flex; align-items: center; justify-content: space-between; padding: 20px 4vw; color: #6c6c75; background: #f7f7f8; border-top: 1px solid #dedee3; font-size: .68rem; }
@@ -437,6 +438,7 @@ footer button:hover { color: #c92c55; }
   .dashboard-listings select { grid-column: span 2; }
   footer { align-items: flex-start; flex-direction: column; gap: 14px; }
   .message-tools { opacity: 1; }
+  .auth-logo { width: min(280px, 88%); height: 82px; }
 }
 
 /* Locked identity and unique username */
