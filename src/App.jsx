@@ -13,6 +13,7 @@ import {
 import {
   addDoc,
   collection,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -279,8 +280,16 @@ function Chat({ user, listing, conversation, onClose, onProfile, onStatusChange,
   const [messages, setMessages] = useState([])
   const [text, setText] = useState('')
   const [error, setError] = useState('')
+  const [safetyVisible, setSafetyVisible] = useState(true)
+  const [otherProfile, setOtherProfile] = useState(null)
   const messagesEnd = useRef(null)
   const isSeller = listing.seller_id === user.uid
+  const otherUserId = isSeller ? conversation?.buyer_id : listing.seller_id
+
+  useEffect(() => {
+    if (!otherUserId) return
+    getDoc(doc(db, 'users', otherUserId)).then((snapshot) => setOtherProfile(snapshot.data() || null))
+  }, [otherUserId])
 
   useEffect(() => {
     if (conversation?.id) {
@@ -354,7 +363,7 @@ function Chat({ user, listing, conversation, onClose, onProfile, onStatusChange,
 
   async function reactToMessage(message, emoji) {
     await updateDoc(doc(db, 'chats', chatId, 'messages', message.id), {
-      reactions: { ...(message.reactions || {}), [user.uid]: emoji },
+      [`reactions.${user.uid}`]: message.reactions?.[user.uid] === emoji ? deleteField() : emoji,
     })
   }
 
@@ -401,8 +410,8 @@ function Chat({ user, listing, conversation, onClose, onProfile, onStatusChange,
   return (
     <div className={embedded ? 'chat-embedded-shell' : 'overlay'} role={embedded ? undefined : 'dialog'} aria-modal={embedded ? undefined : 'true'}>
       <section className={embedded ? 'chat chat-page-panel' : 'modal chat'}>
-        <div className="modal-head"><div><p className="eyebrow">RE: {listing.title}</p><h2>{isSeller ? 'Buyer conversation' : 'Message seller'}</h2><div className="chat-header-actions"><button className="chat-profile-link" onClick={() => onProfile(isSeller ? conversation?.buyer_id : listing.seller_id)}>VIEW {isSeller ? 'BUYER' : 'SELLER'} PROFILE</button><button className="report-link" onClick={() => report('user', isSeller ? conversation?.buyer_id : listing.seller_id, '', isSeller ? conversation?.buyer_id : listing.seller_id)}>REPORT USER</button></div></div><button className="close" onClick={onClose}>×</button></div>
-        <div className="safety">⚠️ Campus Safety Shield: Never send e-transfers/cash before inspecting the physical book in a public campus zone (e.g., SAMU, SUB, MacHall).</div>
+        {embedded ? <div className="chat-context-bar"><img src={listing.photo_url} alt="" /><div><strong>{listing.title}</strong><span>{isSeller ? 'Buyer' : 'Seller'}: {otherProfile?.display_name || otherProfile?.username || 'Student'} · ${Number(listing.price).toFixed(2)}</span></div><button onClick={() => onProfile(otherUserId)}>VIEW PROFILE</button><button className="context-close" onClick={onClose}>×</button></div> : <div className="modal-head"><div><p className="eyebrow">RE: {listing.title}</p><h2>{isSeller ? 'Buyer conversation' : 'Message seller'}</h2><div className="chat-header-actions"><button className="chat-profile-link" onClick={() => onProfile(otherUserId)}>VIEW {isSeller ? 'BUYER' : 'SELLER'} PROFILE</button><button className="report-link" onClick={() => report('user', otherUserId, '', otherUserId)}>REPORT USER</button></div></div><button className="close" onClick={onClose}>×</button></div>}
+        {safetyVisible && <div className="safety">⚠️ Never send money before inspecting the physical book in a public campus location.<button aria-label="Dismiss safety warning" onClick={() => setSafetyVisible(false)}>×</button></div>}
         {isSeller && <div className="chat-listing-status"><span>LISTING: {listing.status}</span><button onClick={() => onStatusChange(listing, 'Pending')}>MARK PENDING</button><button onClick={() => onStatusChange(listing, 'Sold')}>MARK SOLD</button></div>}
         {error && <p className="error chat-error">{error}</p>}
         <div className="messages">
@@ -415,7 +424,7 @@ function Chat({ user, listing, conversation, onClose, onProfile, onStatusChange,
             const canEdit = mine && message.message_type !== 'system' && Date.now() - (message.created_at?.toMillis?.() || 0) <= 5 * 60 * 1000
             return <div className={`message-block ${message.message_type === 'system' ? 'system-message' : mine ? 'mine' : 'theirs'}`} key={message.id}>
               {showDate && <div className="date-divider"><span>{date}</span></div>}
-              {message.message_type === 'system' ? <p>{message.message_text}</p> : <><div className="message-bubble"><p>{message.message_text}</p><small>{message.created_at?.toDate?.().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}{message.edited_at && ' · edited'}</small></div><div className="message-tools"><button onClick={() => reactToMessage(message, '❤️')}>♡</button><button onClick={() => reactToMessage(message, '👍')}>👍</button>{canEdit && <button onClick={() => editMessage(message)}>EDIT</button>}{!mine && <button onClick={() => report('message', message.id, message.message_text, message.sender_id)}>REPORT</button>}</div>{Object.values(message.reactions || {}).length > 0 && <div className="reaction-pill">{Object.values(message.reactions).join(' ')}</div>}</>}
+              {message.message_type === 'system' ? <p>{message.message_text}</p> : <><div className="message-bubble"><p>{message.message_text}</p><small>{message.created_at?.toDate?.().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}{message.edited_at && ' · edited'}</small></div><div className="message-tools">{['❤️', '👍', '😂'].map((emoji) => <button className={message.reactions?.[user.uid] === emoji ? 'active' : ''} key={emoji} onClick={() => reactToMessage(message, emoji)}>{emoji}</button>)}{canEdit && <button onClick={() => editMessage(message)}>EDIT</button>}{!mine && <button onClick={() => report('message', message.id, message.message_text, message.sender_id)}>REPORT</button>}</div>{Object.values(message.reactions || {}).length > 0 && <div className="reaction-pill">{Object.values(message.reactions).join(' ')}</div>}</>}
             </div>
           })}
           <div ref={messagesEnd} />
@@ -493,6 +502,7 @@ function MyProfile({ user, listings, onStatusChange }) {
   const [password, setPassword] = useState('')
   const [notice, setNotice] = useState('')
   const [username, setUsername] = useState('')
+  const [campus, setCampus] = useState('')
 
   useEffect(() => onSnapshot(doc(db, 'users', user.uid), (snapshot) => setProfile(snapshot.data())), [user.uid])
   useEffect(() => onSnapshot(query(collection(db, 'reviews'), where('reviewee_id', '==', user.uid)), (snapshot) => setReviews(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))), [user.uid])
@@ -527,6 +537,10 @@ function MyProfile({ user, listings, onStatusChange }) {
     setUsername(profile?.username || '')
   }, [profile?.username])
 
+  useEffect(() => {
+    setCampus(profile?.campus || '')
+  }, [profile?.campus])
+
   async function saveUsername(event) {
     event.preventDefault()
     const value = username.trim()
@@ -554,6 +568,12 @@ function MyProfile({ user, listings, onStatusChange }) {
     }
   }
 
+  async function saveSchool(event) {
+    event.preventDefault()
+    await updateDoc(doc(db, 'users', user.uid), { campus: campus.trim() })
+    setNotice('School updated.')
+  }
+
   const received = reviews.filter((review) => review.approval_status === 'Approved' && (review.role || 'seller') === reviewTab)
   const active = listings.filter((item) => item.seller_id === user.uid && item.status !== 'Sold')
   const sold = listings.filter((item) => item.seller_id === user.uid && item.status === 'Sold')
@@ -564,7 +584,7 @@ function MyProfile({ user, listings, onStatusChange }) {
       <div className="profile-photo-wrap">{profile?.photo_url || user.photoURL ? <img src={profile?.photo_url || user.photoURL} alt="" /> : <span>{(profile?.display_name || user.displayName || 'S').charAt(0)}</span>}<label><input type="file" accept="image/png, image/jpeg" onChange={uploadAvatar} />CHANGE PHOTO</label></div>
       <div><p className="eyebrow">YOUR PROFILE</p><h1>{profile?.display_name || user.displayName || 'Student'}</h1>{profile?.username && <p className="profile-username">@{profile.username}</p>}<p>{profile?.campus || 'No school selected'} · {user.email}</p></div>
     </section>
-    <section className="identity-card"><div><label>First name<input value={profile?.first_name || ''} readOnly /></label><label>Last name<input value={profile?.last_name || ''} readOnly /></label><label>Email<input value={user.email || ''} readOnly /></label></div><form onSubmit={saveUsername}><label>Username<input value={username} onChange={(e) => setUsername(e.target.value)} minLength="6" pattern="[A-Za-z_]+" placeholder="student_name" required /></label><small>At least 6 characters. Letters and underscores only. Usernames are unique.</small><button className="primary">SAVE USERNAME</button></form></section>
+    <section className="identity-card"><div><label>First name<input value={profile?.first_name || ''} readOnly /></label><label>Last name<input value={profile?.last_name || ''} readOnly /></label><label>Email<input value={user.email || ''} readOnly /></label></div><div className="editable-profile-fields"><form onSubmit={saveUsername}><label>Username<input value={username} onChange={(e) => setUsername(e.target.value)} minLength="6" pattern="[A-Za-z_]+" placeholder="student_name" required /></label><small>At least 6 characters. Letters and underscores only. Usernames are unique.</small><button className="primary">SAVE USERNAME</button></form><form onSubmit={saveSchool}><label>School<input list="school-options" value={campus} onChange={(e) => setCampus(e.target.value)} placeholder="Choose or type your school" /></label><button className="primary">SAVE SCHOOL</button></form></div></section>
     {!hasPassword && <form className="password-card" onSubmit={addPassword}><div><strong>Add password sign-in</strong><p>Your Google account remains connected. This adds email/password as another sign-in method.</p></div><input type="password" minLength="6" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="New password" required /><button className="primary">ADD PASSWORD</button></form>}
     {notice && <p className="profile-notice">{notice}</p>}
     <section className="profile-dashboard"><div className="profile-section-head"><h2>Your listings</h2><span>{active.length} active · {sold.length} sold</span></div><div className="dashboard-listings">{[...active, ...sold].map((item) => <article key={item.id}><img src={item.photo_url} alt="" /><div><span>{item.status}</span><strong>{item.title}</strong><p>${Number(item.price).toFixed(2)} · {item.condition || 'Condition not set'}</p></div><select value={item.status} onChange={(e) => onStatusChange(item, e.target.value)}><option>Available</option><option>Pending</option><option>Sold</option></select></article>)}</div></section>
