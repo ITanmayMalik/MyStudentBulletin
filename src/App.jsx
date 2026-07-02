@@ -19,6 +19,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -271,7 +272,7 @@ function ListingForm({ user, onClose }) {
   )
 }
 
-function Chat({ user, listing, conversation, onClose, onProfile, onStatusChange }) {
+function Chat({ user, listing, conversation, onClose, onProfile, onStatusChange, embedded = false }) {
   const [chatId, setChatId] = useState(conversation?.id || '')
   const [messages, setMessages] = useState([])
   const [text, setText] = useState('')
@@ -384,8 +385,8 @@ function Chat({ user, listing, conversation, onClose, onProfile, onStatusChange 
   let previousDate = ''
 
   return (
-    <div className="overlay" role="dialog" aria-modal="true">
-      <section className="modal chat">
+    <div className={embedded ? 'chat-embedded-shell' : 'overlay'} role={embedded ? undefined : 'dialog'} aria-modal={embedded ? undefined : 'true'}>
+      <section className={embedded ? 'chat chat-page-panel' : 'modal chat'}>
         <div className="modal-head"><div><p className="eyebrow">RE: {listing.title}</p><h2>{isSeller ? 'Buyer conversation' : 'Message seller'}</h2><div className="chat-header-actions"><button className="chat-profile-link" onClick={() => onProfile(isSeller ? conversation?.buyer_id : listing.seller_id)}>VIEW {isSeller ? 'BUYER' : 'SELLER'} PROFILE</button><button className="report-link" onClick={() => report('user', isSeller ? conversation?.buyer_id : listing.seller_id)}>REPORT USER</button></div></div><button className="close" onClick={onClose}>×</button></div>
         <div className="safety">⚠️ Campus Safety Shield: Never send e-transfers/cash before inspecting the physical book in a public campus zone (e.g., SAMU, SUB, MacHall).</div>
         {isSeller && <div className="chat-listing-status"><span>LISTING: {listing.status}</span><button onClick={() => onStatusChange(listing, 'Pending')}>MARK PENDING</button><button onClick={() => onStatusChange(listing, 'Sold')}>MARK SOLD</button></div>}
@@ -476,6 +477,7 @@ function MyProfile({ user, listings, onStatusChange }) {
   const [reviewTab, setReviewTab] = useState('seller')
   const [password, setPassword] = useState('')
   const [notice, setNotice] = useState('')
+  const [username, setUsername] = useState('')
 
   useEffect(() => onSnapshot(doc(db, 'users', user.uid), (snapshot) => setProfile(snapshot.data())), [user.uid])
   useEffect(() => onSnapshot(query(collection(db, 'reviews'), where('reviewee_id', '==', user.uid)), (snapshot) => setReviews(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))), [user.uid])
@@ -506,6 +508,37 @@ function MyProfile({ user, listings, onStatusChange }) {
     await updateDoc(doc(db, 'reviews', review.id), { comment: comment.trim(), edited_at: serverTimestamp() })
   }
 
+  useEffect(() => {
+    setUsername(profile?.username || '')
+  }, [profile?.username])
+
+  async function saveUsername(event) {
+    event.preventDefault()
+    const value = username.trim()
+    if (!/^[A-Za-z_]{6,}$/.test(value)) {
+      setNotice('Username must be at least 6 characters and use letters or underscores only.')
+      return
+    }
+    const normalized = value.toLowerCase()
+    try {
+      await runTransaction(db, async (transaction) => {
+        const userRef = doc(db, 'users', user.uid)
+        const newUsernameRef = doc(db, 'usernames', normalized)
+        const oldNormalized = profile?.username?.toLowerCase()
+        const oldUsernameRef = oldNormalized && oldNormalized !== normalized ? doc(db, 'usernames', oldNormalized) : null
+        const newUsername = await transaction.get(newUsernameRef)
+        const oldUsername = oldUsernameRef ? await transaction.get(oldUsernameRef) : null
+        if (newUsername.exists() && newUsername.data().uid !== user.uid) throw new Error('That username is already taken.')
+        transaction.set(newUsernameRef, { uid: user.uid, username: value })
+        transaction.set(userRef, { username: value }, { merge: true })
+        if (oldUsernameRef && oldUsername?.data().uid === user.uid) transaction.delete(oldUsernameRef)
+      })
+      setNotice('Username updated.')
+    } catch (caught) {
+      setNotice(caught.message)
+    }
+  }
+
   const received = reviews.filter((review) => (review.role || 'seller') === reviewTab)
   const active = listings.filter((item) => item.seller_id === user.uid && item.status !== 'Sold')
   const sold = listings.filter((item) => item.seller_id === user.uid && item.status === 'Sold')
@@ -514,8 +547,9 @@ function MyProfile({ user, listings, onStatusChange }) {
   return <main className="my-profile-page">
     <section className="profile-hero">
       <div className="profile-photo-wrap">{profile?.photo_url || user.photoURL ? <img src={profile?.photo_url || user.photoURL} alt="" /> : <span>{(profile?.display_name || user.displayName || 'S').charAt(0)}</span>}<label><input type="file" accept="image/png, image/jpeg" onChange={uploadAvatar} />CHANGE PHOTO</label></div>
-      <div><p className="eyebrow">YOUR PROFILE</p><h1>{profile?.display_name || user.displayName || 'Student'}</h1><p>{profile?.campus || 'No school selected'} · {user.email}</p></div>
+      <div><p className="eyebrow">YOUR PROFILE</p><h1>{profile?.display_name || user.displayName || 'Student'}</h1>{profile?.username && <p className="profile-username">@{profile.username}</p>}<p>{profile?.campus || 'No school selected'} · {user.email}</p></div>
     </section>
+    <section className="identity-card"><div><label>First name<input value={profile?.first_name || ''} readOnly /></label><label>Last name<input value={profile?.last_name || ''} readOnly /></label><label>Email<input value={user.email || ''} readOnly /></label></div><form onSubmit={saveUsername}><label>Username<input value={username} onChange={(e) => setUsername(e.target.value)} minLength="6" pattern="[A-Za-z_]+" placeholder="student_name" required /></label><small>At least 6 characters. Letters and underscores only. Usernames are unique.</small><button className="primary">SAVE USERNAME</button></form></section>
     {!hasPassword && <form className="password-card" onSubmit={addPassword}><div><strong>Add password sign-in</strong><p>Your Google account remains connected. This adds email/password as another sign-in method.</p></div><input type="password" minLength="6" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="New password" required /><button className="primary">ADD PASSWORD</button></form>}
     {notice && <p className="profile-notice">{notice}</p>}
     <section className="profile-dashboard"><div className="profile-section-head"><h2>Your listings</h2><span>{active.length} active · {sold.length} sold</span></div><div className="dashboard-listings">{[...active, ...sold].map((item) => <article key={item.id}><img src={item.photo_url} alt="" /><div><span>{item.status}</span><strong>{item.title}</strong><p>${Number(item.price).toFixed(2)} · {item.condition || 'Condition not set'}</p></div><select value={item.status} onChange={(e) => onStatusChange(item, e.target.value)}><option>Available</option><option>Pending</option><option>Sold</option></select></article>)}</div></section>
@@ -534,14 +568,15 @@ function Footer({ onNavigate }) {
   return <footer><span>© 2026 MyStudentBulletin</span><nav><button onClick={() => onNavigate('tos')}>Terms</button><button onClick={() => onNavigate('privacy')}>Privacy</button><button onClick={() => onNavigate('aup')}>Acceptable Use</button></nav></footer>
 }
 
-function Inbox({ listings, onOpenChat, buyingChats, sellingChats }) {
+function Inbox({ listings, activeChat, onOpenChat, buyingChats, sellingChats, user, onProfile, onStatusChange }) {
   const [tab, setTab] = useState('buying')
   const chats = tab === 'buying' ? buyingChats : sellingChats
 
   return (
-    <main className="inbox-page">
-      <div className="inbox-heading"><div><p className="eyebrow">YOUR CONVERSATIONS</p><h1>Messages</h1></div><div className="inbox-tabs"><button className={tab === 'buying' ? 'active' : ''} onClick={() => setTab('buying')}>BUYING</button><button className={tab === 'selling' ? 'active' : ''} onClick={() => setTab('selling')}>SELLING</button></div></div>
-      <div className="conversation-list">
+    <main className="chat-workspace">
+      <aside className="chat-sidebar">
+        <div className="inbox-heading"><div><p className="eyebrow">YOUR CONVERSATIONS</p><h1>Messages</h1></div><div className="inbox-tabs"><button className={tab === 'buying' ? 'active' : ''} onClick={() => setTab('buying')}>BUYING</button><button className={tab === 'selling' ? 'active' : ''} onClick={() => setTab('selling')}>SELLING</button></div></div>
+        <div className="conversation-list">
         {chats.length === 0 && <div className="inbox-empty"><strong>No {tab} conversations yet.</strong><p>{tab === 'buying' ? 'Open a listing to contact its seller.' : 'Buyer messages about your listings will appear here.'}</p></div>}
         {chats.map((chat) => {
           const listing = listings.find((item) => item.id === chat.listing_id)
@@ -549,7 +584,11 @@ function Inbox({ listings, onOpenChat, buyingChats, sellingChats }) {
           const unread = tab === 'buying' ? chat.buyer_unread : chat.seller_unread
           return <button className={`conversation-row ${unread ? 'unread' : ''}`} key={chat.id} onClick={() => onOpenChat(chat, listing)}><img src={listing.photo_url} alt="" /><div><span>{tab === 'buying' ? 'BUYING' : 'SELLING'}</span><strong>{listing.title}</strong><p>{chat.last_message || 'Open conversation'}</p></div>{unread && <i>NEW</i>}<b>→</b></button>
         })}
-      </div>
+        </div>
+      </aside>
+      <section className="workspace-thread">
+        {activeChat ? <Chat embedded user={user} listing={activeChat.listing} conversation={activeChat.conversation} onClose={() => onOpenChat(null)} onProfile={onProfile} onStatusChange={onStatusChange} /> : <div className="select-chat"><span>MY</span><strong>Select a conversation</strong><p>Your messages will appear here.</p></div>}
+      </section>
     </main>
   )
 }
@@ -638,8 +677,8 @@ function App() {
         <button className="brand" onClick={() => { setPage('market'); setActiveListing(null) }}><img src="/mystudentbulletin-brand.png" alt="MyStudentBulletin" /></button>
         <nav><button className={`nav-link chat-nav ${page === 'chats' ? 'active' : ''}`} onClick={() => { setPage('chats'); setActiveListing(null) }}>CHATS{unreadChats > 0 && <b>{unreadChats}</b>}</button><button className={`nav-link ${page === 'profile' ? 'active' : ''}`} onClick={() => { setPage('profile'); setActiveListing(null) }}>PROFILE</button><span className="user-email">{user.displayName || user.email}</span><button className="outline" onClick={() => setCreateOpen(true)}>SELL A BOOK</button><button className="logout" onClick={() => signOut(auth)}>LOG OUT</button></nav>
       </header>
-      {page === 'profile' ? <MyProfile user={user} listings={listings} onStatusChange={changeListingStatus} /> : page === 'chats' ? <Inbox listings={listings} buyingChats={buyingChats} sellingChats={sellingChats} onOpenChat={(conversation, listing) => setActiveChat({ conversation, listing })} /> : activeListing ? (
-        <ListingDetail listing={activeListing} user={user} onBack={() => setActiveListing(null)} onMessage={() => setActiveChat({ listing: activeListing })} onProfile={setProfileId} onStatusChange={changeListingStatus} />
+      {page === 'profile' ? <MyProfile user={user} listings={listings} onStatusChange={changeListingStatus} /> : page === 'chats' ? <Inbox user={user} listings={listings} buyingChats={buyingChats} sellingChats={sellingChats} activeChat={activeChat} onOpenChat={(conversation, listing) => setActiveChat(conversation ? { conversation, listing } : null)} onProfile={setProfileId} onStatusChange={changeListingStatus} /> : activeListing ? (
+        <ListingDetail listing={activeListing} user={user} onBack={() => setActiveListing(null)} onMessage={() => { setActiveChat({ listing: activeListing }); setPage('chats') }} onProfile={setProfileId} onStatusChange={changeListingStatus} />
       ) : <main className="market">
         <aside>
           <p className="eyebrow">THE LOCAL BOOK BOARD</p>
@@ -665,7 +704,6 @@ function App() {
       </main>}
       <Footer onNavigate={setPage} />
       {createOpen && <ListingForm user={user} onClose={() => setCreateOpen(false)} />}
-      {activeChat && <Chat user={user} listing={activeChat.listing} conversation={activeChat.conversation} onClose={() => setActiveChat(null)} onProfile={setProfileId} onStatusChange={changeListingStatus} />}
       {profileId && <Profile userId={profileId} listings={listings} onClose={() => setProfileId('')} />}
     </>
   )

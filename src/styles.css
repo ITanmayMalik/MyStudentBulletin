@@ -278,7 +278,7 @@ input:focus, select:focus, textarea:focus, .cover-photo, .listing-thumbs button.
 :root { color: #111114; background: #ffffff; }
 body { color: #111114; background: #ffffff; background-image: radial-gradient(circle at 82% -8%, rgba(255,107,138,.1), transparent 28%); }
 header { background: rgba(255,255,255,.94); border-color: #dedee3; }
-.brand { background: #000; }
+.brand { background: transparent; }
 .market { background: #fff; }
 aside { background: linear-gradient(180deg, #f8f8fa, #fff); border-color: #dedee3; }
 h1, h2, h3, .results, .listing-page, .inbox-page { color: #111114; }
@@ -330,7 +330,7 @@ input::placeholder, textarea::placeholder { color: #9999a2; }
 .results-head > span, .optional, .section-title small, .publish-bar > span { color: #74747e; }
 
 /* Full navigation logo */
-.brand { width: 220px; height: 64px; flex: 0 0 220px; background: #000; }
+.brand { width: 220px; height: 64px; flex: 0 0 220px; background: transparent; }
 .brand img { width: 100%; height: 100%; object-fit: contain; object-position: left center; }
 
 /* Authentication and legal consent */
@@ -437,4 +437,54 @@ footer button:hover { color: #c92c55; }
   .dashboard-listings select { grid-column: span 2; }
   footer { align-items: flex-start; flex-direction: column; gap: 14px; }
   .message-tools { opacity: 1; }
+}
+
+/* Locked identity and unique username */
+.identity-card { display: grid; grid-template-columns: 1.4fr 1fr; gap: 30px; margin: 28px 0; padding: 24px; border: 1px solid #dedee3; background: #fafafa; }
+.identity-card > div { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.identity-card > div label:last-child { grid-column: span 2; }
+.identity-card label { margin-bottom: 13px; }
+.identity-card input[readonly] { color: #777780; background: #eeeeF1; cursor: not-allowed; }
+.identity-card form { padding-left: 28px; border-left: 1px solid #dedee3; }
+.identity-card form small { display: block; margin: -4px 0 14px; color: #777780; font-size: .62rem; line-height: 1.45; }
+.profile-hero .profile-username { color: #c92c55; font-weight: 750; }
+
+/* Full-page split chat workspace */
+.chat-workspace { height: calc(100vh - 78px); min-height: 620px; display: grid; grid-template-columns: 370px minmax(0, 1fr); overflow: hidden; background: #fff; }
+.chat-sidebar { min-width: 0; padding: 0; border-right: 1px solid #dedee3; background: #fafafa; overflow: hidden; }
+.chat-sidebar .inbox-heading { display: block; padding: 25px 20px 16px; border-bottom: 1px solid #dedee3; }
+.chat-sidebar .inbox-heading h1 { font-size: 2.2rem; margin-bottom: 18px; }
+.chat-sidebar .inbox-tabs { width: 100%; }
+.chat-sidebar .inbox-tabs button { flex: 1; }
+.chat-sidebar .conversation-list { height: calc(100% - 150px); margin: 0; padding: 10px; overflow-y: auto; scrollbar-width: thin; }
+.chat-sidebar .conversation-row { grid-template-columns: 55px minmax(0, 1fr) auto; gap: 10px; margin-bottom: 6px; padding: 9px; box-shadow: none; }
+.chat-sidebar .conversation-row img { width: 55px; height: 55px; border-radius: 7px; }
+.chat-sidebar .conversation-row div { min-width: 0; }
+.chat-sidebar .conversation-row strong, .chat-sidebar .conversation-row p { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.chat-sidebar .conversation-row > b { display: none; }
+.chat-sidebar .conversation-row > i { grid-column: 3; grid-row: 1; }
+.workspace-thread { min-width: 0; height: 100%; background: #fff; }
+.chat-embedded-shell { width: 100%; height: 100%; }
+.chat-page-panel { width: 100%; max-width: none; height: 100%; max-height: none; border: 0; box-shadow: none; }
+.select-chat { height: 100%; display: flex; align-items: center; justify-content: center; flex-direction: column; color: #777780; background: radial-gradient(circle, #fff5f7, #fff 42%); }
+.select-chat span { width: 66px; height: 66px; display: grid; place-items: center; margin-bottom: 16px; border-radius: 50%; color: #111114; background: #ff9fb3; font-size: 1rem; font-weight: 950; }
+.select-chat strong { color: #111114; font-size: 1.2rem; }
+.select-chat p { margin-top: 7px; font-size: .78rem; }
+.chat-page-panel .messages { padding-left: max(25px, 8vw); padding-right: max(25px, 8vw); }
+.chat-page-panel .composer { padding-left: max(20px, 6vw); padding-right: max(20px, 6vw); }
+
+@media (max-width: 800px) {
+  .identity-card { grid-template-columns: 1fr; }
+  .identity-card form { padding: 20px 0 0; border-top: 1px solid #dedee3; border-left: 0; }
+  .chat-workspace { grid-template-columns: 290px minmax(0, 1fr); }
+}
+@media (max-width: 620px) {
+  .chat-workspace { height: auto; min-height: calc(100vh - 78px); grid-template-columns: 1fr; grid-template-rows: 300px minmax(520px, 1fr); overflow: visible; }
+  .chat-sidebar { border-right: 0; border-bottom: 1px solid #dedee3; }
+  .chat-sidebar .inbox-heading { display: flex; padding: 14px; }
+  .chat-sidebar .inbox-heading h1 { margin: 0; font-size: 1.5rem; }
+  .chat-sidebar .conversation-list { height: 210px; }
+  .workspace-thread { min-height: 520px; }
+  .identity-card > div { grid-template-columns: 1fr; }
+  .identity-card > div label:last-child { grid-column: auto; }
 }
